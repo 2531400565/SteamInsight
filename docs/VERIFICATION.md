@@ -275,9 +275,9 @@ HKEY_CURRENT_USER\Software\Valve\Steam\ActiveProcess
 | --- | --- |
 | `SteamPath` | `e:/steam` |
 | `ActiveUser`（REG_DWORD，十六进制） | `0x17080519` → `386401561` |
-| SteamID64 = `76561197960265728 + ActiveUser` | **`76561198346667289`** |
+| SteamID64 = `76561197960265728 + ActiveUser` | **`76561198********`** |
 | 该 SteamID64 是否存在于 `loginusers.vdf` | ✅ 存在（注册表与 VDF 互相印证） |
-| `AutoLoginUser` | `2531400565`（仅作「未在线」时的兜底） |
+| `AutoLoginUser` | `（已隐去）`（仅作「未在线」时的兜底） |
 | `loginusers.vdf` 账号块数 | 3 |
 
 SteamID64 基数 7.6e16 超出 `Number.MAX_SAFE_INTEGER`（9.007e15），全程用 **BigInt** 运算，
@@ -346,8 +346,8 @@ Node 的 `https.get` 使用自带 CA 包且**不读系统代理设置**，握手
 
 | 断言 | 结果 |
 | --- | --- |
-| 快捷登录卡片渲染 | `data-quick-login` 存在，含昵称 / 账号名 / `SteamID64 76561198346667289` |
-| 点「填入该账号」 | `steamId` 输入框被填入 `76561198346667289`，并提示「已填入本机登录的账号」 |
+| 快捷登录卡片渲染 | `data-quick-login` 存在，含昵称 / 账号名 / `SteamID64 76561198********` |
+| 点「填入该账号」 | `steamId` 输入框被填入 `76561198********`，并提示「已填入本机登录的账号」 |
 | 检测未就绪时 | 卡片不出现（浏览器预览模式 `installed: false`），不会给出假账号 |
 
 截图：`shots/16-welcome-quick-login.png`、`shots/17-quick-login-filled.png`。
@@ -477,7 +477,7 @@ Steam 判定签名无效（via=net status=200）：ns:http://specs.openid.net/au
 
 | 场景 | Steam 侧应答 | 失败页/成功页 | `startOpenId()` 返回值 |
 | --- | --- | --- | --- |
-| `valid` | 拦截并回 `is_valid:true` | **`SUCCESS_PAGE`** | `{"ok":true,"steamId":"76561198346667289"}` |
+| `valid` | 拦截并回 `is_valid:true` | **`SUCCESS_PAGE`** | `{"ok":true,"steamId":"76561198********"}` |
 | `invalid` | 拦截并回 `is_valid:false` | `FAIL_PAGE` | `{"ok":false,"error":"Steam 判定签名无效（via=net status=200）：…"}` |
 | **`real`** | 不拦截，拿假签名**真打一次 Steam** | `FAIL_PAGE` | 同上（`via=net status=200`） |
 
