@@ -1,0 +1,356 @@
+@import 'tailwindcss';
+
+/* ============================================================
+   Steam Insight 设计系统
+   深色优先 · Steam 蓝 + Windows 11 Fluent · 毛玻璃 · 16px 圆角
+   ============================================================ */
+
+:root,
+[data-theme='dark'] {
+  /* 背景层级 */
+  --si-bg-0: #070b11;
+  --si-bg-1: #0e1621;
+  --si-bg-2: #131e2b;
+  --si-bg-3: #1a2836;
+  --si-bg-4: #23354a;
+  --si-glass: rgba(19, 30, 43, 0.66);
+  --si-glass-2: rgba(26, 40, 54, 0.58);
+
+  /* 描边 */
+  --si-line: rgba(102, 192, 244, 0.1);
+  --si-line-2: rgba(102, 192, 244, 0.2);
+  --si-line-3: rgba(102, 192, 244, 0.34);
+
+  /* 文字 */
+  --si-t1: #e9f2fa;
+  --si-t2: #a3b8cc;
+  --si-t3: #6d8299;
+
+  /* 品牌 / 语义色 */
+  --si-accent: #66c0f4;
+  --si-accent-2: #2d7dd2;
+  --si-accent-3: #1b6dd5;
+  --si-ok: #4ade80;
+  --si-warn: #fbbf24;
+  --si-danger: #f87171;
+
+  /* 热力图色阶 0h/1h/2-3h/4h+ */
+  --si-heat-0: #17222f;
+  --si-heat-1: #1d4a6b;
+  --si-heat-2: #2d7dd2;
+  --si-heat-3: #66c0f4;
+
+  /* 图表 */
+  --si-grid: rgba(102, 192, 244, 0.09);
+  --si-axis: #6d8299;
+
+  --si-shadow-soft: 0 8px 28px -12px rgba(0, 0, 0, 0.72);
+  --si-shadow-card: 0 18px 44px -22px rgba(0, 0, 0, 0.86);
+  --si-shadow-glow: 0 0 0 1px rgba(102, 192, 244, 0.22), 0 14px 40px -18px rgba(45, 125, 210, 0.55);
+  color-scheme: dark;
+}
+
+[data-theme='light'] {
+  --si-bg-0: #eef3f8;
+  --si-bg-1: #f5f8fb;
+  --si-bg-2: #ffffff;
+  --si-bg-3: #f0f5fa;
+  --si-bg-4: #e2ebf4;
+  --si-glass: rgba(255, 255, 255, 0.72);
+  --si-glass-2: rgba(240, 245, 250, 0.68);
+
+  --si-line: rgba(27, 109, 213, 0.12);
+  --si-line-2: rgba(27, 109, 213, 0.22);
+  --si-line-3: rgba(27, 109, 213, 0.36);
+
+  /* V4/UI2：浅色主题对比度复核 —— t3/axis/ok/warn 在白底实测 3.2–3.5:1，
+     辅助文字（10.5–11.5px）与状态徽标都低于 WCAG AA 的 4.5:1，统一加深一档：
+     t3/axis #7b8b9c→#65768a（4.7:1）、ok #16a34a→#15803d（5.0:1）、warn #d97706→#b45309（5.0:1） */
+  --si-t1: #10202f;
+  --si-t2: #48596b;
+  --si-t3: #65768a;
+
+  --si-accent: #1b6dd5;
+  --si-accent-2: #2d7dd2;
+  --si-accent-3: #1b6dd5;
+  --si-ok: #15803d;
+  --si-warn: #b45309;
+  --si-danger: #dc2626;
+
+  --si-heat-0: #dde6ef;
+  --si-heat-1: #a9cbe8;
+  --si-heat-2: #4f97dd;
+  --si-heat-3: #1b6dd5;
+
+  --si-grid: rgba(27, 109, 213, 0.12);
+  --si-axis: #65768a;
+
+  --si-shadow-soft: 0 8px 26px -14px rgba(16, 32, 47, 0.24);
+  --si-shadow-card: 0 18px 44px -24px rgba(16, 32, 47, 0.3);
+  --si-shadow-glow: 0 0 0 1px rgba(27, 109, 213, 0.2), 0 14px 40px -20px rgba(27, 109, 213, 0.4);
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-app: var(--si-bg-0);
+  --color-bg1: var(--si-bg-1);
+  --color-bg2: var(--si-bg-2);
+  --color-bg3: var(--si-bg-3);
+  --color-bg4: var(--si-bg-4);
+  --color-glass: var(--si-glass);
+  --color-glass2: var(--si-glass-2);
+
+  --color-line: var(--si-line);
+  --color-line2: var(--si-line-2);
+  --color-line3: var(--si-line-3);
+
+  --color-t1: var(--si-t1);
+  --color-t2: var(--si-t2);
+  --color-t3: var(--si-t3);
+
+  --color-accent: var(--si-accent);
+  --color-accent2: var(--si-accent-2);
+  --color-accent3: var(--si-accent-3);
+  --color-ok: var(--si-ok);
+  --color-warn: var(--si-warn);
+  --color-danger: var(--si-danger);
+
+  --color-heat0: var(--si-heat-0);
+  --color-heat1: var(--si-heat-1);
+  --color-heat2: var(--si-heat-2);
+  --color-heat3: var(--si-heat-3);
+
+  --radius-card: 16px;
+  --radius-pill: 999px;
+
+  --shadow-soft: var(--si-shadow-soft);
+  --shadow-card: var(--si-shadow-card);
+  --shadow-glow: var(--si-shadow-glow);
+
+  --font-sans:
+    'Segoe UI Variable Text', 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', Inter,
+    system-ui, -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--si-bg-0);
+  color: var(--si-t1);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+}
+
+/* 应用底部氛围光 */
+.app-aurora::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(58rem 32rem at 12% -8%, rgba(45, 125, 210, 0.2), transparent 62%),
+    radial-gradient(46rem 28rem at 96% 4%, rgba(102, 192, 244, 0.13), transparent 60%),
+    radial-gradient(40rem 30rem at 60% 108%, rgba(27, 109, 213, 0.12), transparent 62%);
+  z-index: 0;
+}
+
+/* ---------- 毛玻璃面板 ---------- */
+.glass {
+  background: var(--si-glass);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid var(--si-line);
+}
+
+.card {
+  background: linear-gradient(180deg, var(--si-bg-2) 0%, color-mix(in srgb, var(--si-bg-2) 88%, #000) 100%);
+  border: 1px solid var(--si-line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--si-shadow-soft);
+}
+
+[data-theme='light'] .card {
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+}
+
+.card-hover {
+  transition:
+    transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1),
+    box-shadow 0.22s ease,
+    border-color 0.22s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-2px);
+  border-color: var(--si-line-2);
+  box-shadow: var(--si-shadow-card);
+}
+
+.accent-gradient {
+  background: linear-gradient(135deg, var(--si-accent-3) 0%, var(--si-accent) 100%);
+}
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--si-accent) 22%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--si-accent) 42%, transparent);
+  background-clip: content-box;
+}
+
+/* ---------- 页面切换动画 ---------- */
+@keyframes si-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-enter {
+  animation: si-fade-up 0.34s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@keyframes si-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.pop-enter {
+  animation: si-pop 0.24s ease-out both;
+}
+
+@keyframes si-shimmer {
+  0% {
+    background-position: -180% 0;
+  }
+  100% {
+    background-position: 180% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--si-bg-3) 25%,
+    var(--si-bg-4) 50%,
+    var(--si-bg-3) 75%
+  );
+  background-size: 200% 100%;
+  animation: si-shimmer 1.5s linear infinite;
+  border-radius: 8px;
+}
+
+@keyframes si-pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+
+.status-dot-live {
+  animation: si-pulse-dot 1.6s ease-in-out infinite;
+}
+
+@keyframes si-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: si-spin 0.9s linear infinite;
+}
+
+/* ---------- 焦点可见性（键盘可达） ---------- */
+:focus-visible {
+  outline: 2px solid var(--si-accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+
+.text-shadow-soft {
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------- V4 / O-7 紧凑密度 ----------
+   AppLayout 把密度写到 <html data-density>；这里只作用于主内容区（侧边栏 / 标题栏不变），
+   优先级（属性 + main + 类）高于 Tailwind 的同名单类选择器，不需要 !important。 */
+[data-density='compact'] main .px-6 { padding-left: 0.75rem; padding-right: 0.75rem; }
+[data-density='compact'] main .py-6 { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+[data-density='compact'] main .space-y-5 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.75rem; }
+[data-density='compact'] main .space-y-4 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.625rem; }
+[data-density='compact'] main .space-y-3 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.5rem; }
+[data-density='compact'] main .space-y-2 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.375rem; }
+[data-density='compact'] main .gap-5 { gap: 1rem; }
+[data-density='compact'] main .gap-4 { gap: 0.75rem; }
+[data-density='compact'] main .gap-3 { gap: 0.5rem; }
+[data-density='compact'] main .gap-2 { gap: 0.375rem; }
+[data-density='compact'] main .p-3 { padding: 0.625rem; }
+[data-density='compact'] main .p-2\.5 { padding: 0.5rem; }
+[data-density='compact'] main .px-3 { padding-left: 0.625rem; padding-right: 0.625rem; }
+[data-density='compact'] main .py-3 { padding-top: 0.625rem; padding-bottom: 0.625rem; }
+[data-density='compact'] main .py-2\.5 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+[data-density='compact'] main .py-2 { padding-top: 0.375rem; padding-bottom: 0.375rem; }
+[data-density='compact'] main .py-1\.5 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+[data-density='compact'] main .py-1 { padding-top: 0.2rem; padding-bottom: 0.2rem; }

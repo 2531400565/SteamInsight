@@ -1,0 +1,74 @@
+appId: com.steaminsight.desktop
+productName: Steam Insight
+copyright: Copyright (c) 2026 Steam Insight
+
+directories:
+  output: dist
+  buildResources: build
+
+# 白名单式排除：保留 electron-builder 默认对 node_modules 中
+# production dependencies（sql.js / exceljs）的自动收集，只剔掉源码与工具目录。
+files:
+  - '!electron/**'
+  - '!src/**'
+  - '!tools/**'
+  - '!docs/**'
+  - '!assets/**'
+  - '!public/**'
+  - '!build/**'
+  - '!dist/**'
+  - '!node_modules/.cache/**'
+  - '!out/**/*.map'
+  - '!**/*.tsbuildinfo'
+  - '!electron.vite.config.*'
+  - '!tsconfig*.json'
+  - '!.npmrc'
+  - '!README.md'
+  - '!package-lock.json'
+
+asar: true
+
+# 托盘图标必须显式进包：build/ 是 electron-builder 的 buildResources 目录，
+# 默认只用于安装包图标、不会复制进 app（上面的 files 里也排除了 !build/**）。
+# 缺少这一步时主进程按 process.resourcesPath/tray.png 找不到文件，
+# nativeImage 拿到空图 → 托盘图标不显示，且一路静默无报错。
+extraResources:
+  - from: build/tray.png
+    to: tray.png
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: '${productName}-${version}-setup.${ext}'
+
+  # ---- 代码签名：当前「不签」，这是刻意的决定 ----
+  # 现状：产物完全未签名（实测 PE 证书表 size = 0），朋友双击安装会撞
+  # 「Windows 已保护你的电脑」蓝色拦截框，需要点「更多信息 → 仍要运行」；
+  # 微信 / QQ 传过去的 exe 更容易被拦，甚至可能被当成风险软件劝退。
+  #
+  # 内部几个人用 → 选「不签 + 提前说明」就够了，话术见 docs/DEPLOY-AND-NETWORK.md 第三节末尾。
+  # 要往外发再买证书（OV 约 ¥1000-2500/年，EV 更贵但立刻有信誉）。
+  #
+  # 真买了证书时，把下面 4 行原样加到**本 win: 块内部**（不要另起一个 win: 键），
+  # 证书路径与密码用环境变量注入，绝不提交进仓库：
+  #
+  #   certificateFile: ${env.CSC_LINK}
+  #   certificatePassword: ${env.CSC_KEY_PASSWORD}
+  #   signingHashAlgorithms: [sha256]
+  #   rfc3161TimeStampServer: http://timestamp.digicert.com
+  #
+  # 除这几行外不需要改任何代码：签名发生在打包阶段，与主进程逻辑无关。
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  # 安装后自动在桌面与开始菜单创建快捷方式
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Steam Insight
+  # 卸载时保留用户数据（数据库里有历史游玩记录，误删代价高）
+  deleteAppDataOnUninstall: false
