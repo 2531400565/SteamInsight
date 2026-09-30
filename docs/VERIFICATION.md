@@ -592,7 +592,7 @@ D_wishlist       name 保留 · finalPriceCents 2980 保留（-1 不覆盖）
 **实测**（`electron.exe .` 直跑 `out/`，复用真实 userData）：
 
 ```
-dbPath     C:\Users\25314\AppData\Roaming\steam-insight\steam-insight.db
+dbPath     C:\Users\<用户名>\AppData\Roaming\steam-insight\steam-insight.db
 lastSyncAt 1790411842000        ← 由 users.synced_at（1790411842 秒）× 1000 回填
 指示器     已同步 · 15 分钟前     ← 修复前：尚未同步
 设置页     上次同步 2026-09-26 16:37
@@ -1291,7 +1291,7 @@ Windows 会把每个通知图标收到的图像存进
 
 ### 桌面快捷方式
 
-已在系统桌面（`C:\桌面`，由 `SHGetKnownFolderPath` 确认，非 `C:\Users\25314\Desktop`）创建 `Steam Insight.lnk`，指向 `dist/win-unpacked/Steam Insight.exe`，含工作目录与图标设置，回读校验通过。
+已在系统桌面（`C:\桌面`，由 `SHGetKnownFolderPath` 确认，非 `C:\Users\<用户名>\Desktop`）创建 `Steam Insight.lnk`，指向 `dist/win-unpacked/Steam Insight.exe`，含工作目录与图标设置，回读校验通过。
 
 ---
 

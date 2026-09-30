@@ -3,7 +3,7 @@
 > 归档日期：2026-09-27（V2 全部交付之后）
 > 与 [`ROADMAP-V2.md`](ROADMAP-V2.md) **不重复** —— V2 的条目已全部落地，验收见 [`SELF-CHECK-REPORT-V2.md`](SELF-CHECK-REPORT-V2.md)。
 > 本文每一条都带 `file:line` 依据。数据库部分的数字来自**当日本机真实库**
-> （`C:\Users\25314\AppData\Roaming\steam-insight\steam-insight.db`，2.1 MB，账号 `76561198********`）。
+> （`C:\Users\<用户名>\AppData\Roaming\steam-insight\steam-insight.db`，2.1 MB，账号 `76561198********`）。
 > 复现脚本：`node tools/db-audit.mjs`、`node tools/db-size.mjs`（只读，不改数据）。
 
 ## 0. 本次体检的真实底数
