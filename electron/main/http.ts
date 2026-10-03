@@ -13,6 +13,8 @@
  */
 import https from 'node:https'
 import { app, net, session } from 'electron'
+import { getSettings, normalizeProxyText } from './settings'
+import { logInfo, logWarn } from './logger'
 
 export interface HttpResult {
   ok: boolean
@@ -137,6 +139,10 @@ export async function fetchBuffer(url: string, o: HttpOptions = {}): Promise<Htt
 /** 当前生效的代理描述，例如 `127.0.0.1:7897` 或 `直连`。用于把网络结论说清楚。 */
 export async function proxyLabel(url: string): Promise<string> {
   if (!app.isReady()) return '未知'
+  // 优先报「我们自己配置的代理」：系统代理指着一个没人监听的端口是常见坑，
+  // 而用户在应用里已经填了可用地址，这时界面就该说我们用的那个。
+  const custom = normalizeProxyText(getSettings().customProxy)
+  if (custom) return custom
   try {
     const raw = await session.defaultSession.resolveProxy(url)
     const first = raw.split(';')[0].trim()
@@ -145,5 +151,52 @@ export async function proxyLabel(url: string): Promise<string> {
     return mt ? mt[2] : first
   } catch {
     return '未知'
+  }
+}
+
+/**
+ * 把设置里的 customProxy 应用到**本应用**的 Chromium 会话。
+ *
+ * 作用域说明（这是本函数最重要的性质）：`session.defaultSession.setProxy` 只影响本进程的网络栈，
+ * 不写系统代理设置、不动注册表，因此同一台机器上的 Nacos / Docker / 浏览器完全不受影响。
+ * 传空字符串 = 恢复成「跟随系统」。
+ */
+export async function applyCustomProxy(proxyText?: string): Promise<{ applied: boolean; label: string; error: string | null }> {
+  if (!app.isReady()) return { applied: false, label: '未知', error: '应用尚未就绪' }
+  const custom = normalizeProxyText(proxyText ?? getSettings().customProxy)
+  try {
+    if (!custom) {
+      await session.defaultSession.setProxy({ mode: 'system' })
+      logInfo('net', '代理已切回跟随系统设置', { customProxy: '' })
+      return { applied: true, label: '跟随系统', error: null }
+    }
+    const isSocks = /^socks/i.test(proxyText ?? '') || /^socks/i.test(custom)
+    await session.defaultSession.setProxy({ mode: 'fixed_servers', proxyRules: `${isSocks ? 'SOCKS5' : 'PROXY'} ${custom}` })
+    logInfo('net', '已应用自定义代理', { customProxy: custom })
+    return { applied: true, label: custom, error: null }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    logWarn('net', '应用自定义代理失败', { customProxy: custom, error: msg })
+    return { applied: false, label: '未知', error: msg }
+  }
+}
+
+/**
+ * 代理连通性测试：真的按新代理发一个请求，比「端口能连通」更接近用户的实际体验。
+ * 用固定的轻量端点（GetServerInfo，不带 key 也返回 200），失败时把两条通道的原因都带回来。
+ */
+export async function testProxy(): Promise<{ ok: boolean; via: string | null; ms: number; error: string | null }> {
+  const started = Date.now()
+  const url = 'https://api.steampowered.com/ISteamWebAPIUtil/GetServerInfo/v1/'
+  // 真正按当前生效的代理发一次请求：fetchText 内部就是 net 优先、失败回退 node，
+  // 测出来的结论与同步时走的是同一条路。
+  const res = await fetchText(url, { timeoutMs: 10000 })
+  const ms = Date.now() - started
+  const hasPayload = res.body.includes('servertime')
+  return {
+    ok: res.ok && hasPayload,
+    via: res.via,
+    ms,
+    error: res.ok ? (hasPayload ? null : '响应里没有 servertime（可能被中间设备拦截）') : res.error
   }
 }

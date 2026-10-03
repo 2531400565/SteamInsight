@@ -5,6 +5,7 @@ import { useDataStore } from '@/store/useDataStore'
 import { personaStateLabel } from '@/utils/format'
 import { useRecentAccounts, type RecentAccount } from '@/hooks/useRecentAccounts'
 import { Logo } from './Logo'
+import { NetworkPopover } from '@/components/layout/NetworkPopover'
 import { SyncIndicator } from './SyncIndicator'
 import { WindowControls } from './WindowControls'
 
@@ -122,6 +123,7 @@ export function TitleBar() {
           </span>
         ) : null}
 
+        <NetworkPopover />
         <SyncIndicator />
 
         {user ? (

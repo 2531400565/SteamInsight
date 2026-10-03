@@ -22,6 +22,8 @@ import type { ThemeMode } from '@/types/steam'
 import { AccountSection } from './settings/AccountSection'
 import { DataSection } from './settings/DataSection'
 import { NetworkSection } from './settings/NetworkSection'
+import { NetworkAccessPanel } from '@/components/shared/NetworkAccessPanel'
+import { DataTrustPanel } from '@/components/shared/DataTrustPanel'
 import { AboutSection } from './settings/AboutSection'
 
 type SectionKey = 'general' | 'notify' | 'appearance' | 'account' | 'network' | 'data' | 'about'
@@ -296,7 +298,15 @@ export default function SettingsPage() {
       {activeTab === 'account' ? <AccountSection busy={busy} run={run} setMessage={setMessage} /> : null}
 
       {/* 网络 */}
-      {activeTab === 'network' ? <NetworkSection /> : null}
+      {activeTab === 'network' ? (
+        <>
+          <NetworkAccessPanel />
+          <NetworkSection />
+        </>
+      ) : null}
+
+      {/* 数据可信度：接口结构指纹 + 成就新鲜度 */}
+      {activeTab === 'data' ? <DataTrustPanel /> : null}
 
       {/* 数据 */}
       {activeTab === 'data' ? <DataSection busy={busy} run={run} setMessage={setMessage} /> : null}

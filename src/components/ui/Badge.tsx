@@ -6,6 +6,8 @@ interface BadgeProps {
   size?: 'xs' | 'sm'
   icon?: ReactNode
   className?: string
+  /** 悬浮说明：Badge 常常尺寸太小装不下解释，title 是最省事的补充 */
+  title?: string
 }
 
 const BTONE: Record<NonNullable<BadgeProps['tone']>, string> = {
@@ -21,9 +23,10 @@ const BSIZE: Record<NonNullable<BadgeProps['size']>, string> = {
   sm: 'text-xs px-2 py-0.5 gap-1'
 }
 
-export function Badge({ children, tone = 'neutral', size = 'sm', icon, className = '' }: BadgeProps) {
+export function Badge({ children, tone = 'neutral', size = 'sm', icon, className = '', title }: BadgeProps) {
   return (
     <span
+      title={title}
       className={[
         'inline-flex items-center rounded-pill font-medium whitespace-nowrap',
         BTONE[tone],

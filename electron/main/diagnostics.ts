@@ -24,6 +24,17 @@ export function maskSecret(secret: string): string {
 }
 
 /** 把文本里出现的明文密钥全部替换掉。空密钥时原样返回。 */
+/**
+ * SteamID 脱敏：**本地日志保持原样**（排障时需要知道是哪个账号），
+ * 只在**导出诊断包**时打码 —— 因为诊断包是会被发出去的。
+ *
+ * 保留前 4 位与末 4 位：足够在「是不是同一个账号」这类排障问题上做判断，
+ * 又不能反查出一个真实的 Steam 主页。
+ */
+export function redactSteamId(text: string): string {
+  return text.replace(/\b(7656\d{12,16})\b/g, (m) => `${m.slice(0, 4)}…${m.slice(-4)}`)
+}
+
 export function redactSecret(text: string, secret: string): string {
   const s = secret.trim()
   if (!s || s.length < 6) return text
@@ -83,6 +94,7 @@ export async function buildDiagnostics(): Promise<DiagnosticsPack> {
       enableDemoData: s.enableDemoData,
       steamId: s.steamId,
       personaName: s.personaName,
+      steamIdMasked: s.steamId ? redactSteamId(s.steamId) : '',
       priceAlertCount: s.priceAlerts.length,
       // Key 本身绝不进包
       steamApiKey: maskSecret(s.steamApiKey)
@@ -91,10 +103,10 @@ export async function buildDiagnostics(): Promise<DiagnosticsPack> {
     network: network as NetworkDiagnosis,
     logs: {
       files: listLogFiles(),
-      tail: readLogTail(600).map((line) => redactSecret(line, s.steamApiKey)),
+      tail: readLogTail(600).map((line) => redactSteamId(redactSecret(line, s.steamApiKey))),
       redacted: true
     },
-    note: '此文件用于排查问题：包含运行环境、设置（API Key 已打码）、连通性自检结果与最近 600 行日志。不含任何 Steam 账号密码。'
+    note: '此文件用于排查问题：包含运行环境、设置（API Key 已打码、SteamID 已部分隐藏）、连通性自检结果与最近 600 行日志。不含任何 Steam 账号密码。'
   }
 }
 

@@ -1,5 +1,6 @@
+import { prefetchRoute } from '@/hooks/useRoutePrefetch'
 import { useEffect, useState, type ComponentType } from 'react'
-import { Crosshair, Gamepad2, GitCompareArrows, Heart, LayoutDashboard, Library, PanelLeftClose, PanelLeftOpen, Settings, Sparkles, Store, Trophy } from 'lucide-react'
+import { Crosshair, Gamepad2, History, GitCompareArrows, Heart, LayoutDashboard, Library, PanelLeftClose, PanelLeftOpen, Settings, Sparkles, Store, Trophy } from 'lucide-react'
 import { useAppStore, ROUTE_LABELS, type RouteKey } from '@/store/useAppStore'
 import { useDataStore } from '@/store/useDataStore'
 
@@ -23,6 +24,7 @@ const NAV: NavItem[] = [
   { key: 'store', icon: Store },
   { key: 'wishlist', icon: Heart, badge: 'wishlistDrops' },
   { key: 'wrapped', icon: Sparkles },
+  { key: 'career', icon: History },
   { key: 'settings', icon: Settings }
 ]
 
@@ -83,6 +85,9 @@ export function Sidebar() {
             key={item.key}
             type="button"
             onClick={() => navigate(item.key)}
+            // 懒加载页面的 chunk 预热：鼠标移上来就先下载，点下去时通常已经是热的
+            onMouseEnter={() => prefetchRoute(item.key)}
+            onFocus={() => prefetchRoute(item.key)}
             aria-current={active ? 'page' : undefined}
             aria-label={badgeValue > 0 ? `${ROUTE_LABELS[item.key]}，${badgeHint}` : ROUTE_LABELS[item.key]}
             title={collapsed ? ROUTE_LABELS[item.key] : undefined}

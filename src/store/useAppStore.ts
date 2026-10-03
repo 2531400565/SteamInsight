@@ -19,6 +19,7 @@ export type RouteKey =
   | 'store'
   | 'wishlist'
   | 'wrapped'
+  | 'career'
   | 'settings'
 
 export interface RouteParams {
@@ -54,6 +55,7 @@ export const ROUTE_LABELS: Record<RouteKey, string> = {
   store: '折扣商城',
   wishlist: '愿望单',
   wrapped: 'Steam Wrapped',
+  career: 'Steam 生涯',
   settings: '设置'
 }
 

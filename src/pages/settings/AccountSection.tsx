@@ -1,5 +1,6 @@
+import { bridge } from '@/services/bridge'
 import { useEffect, useState } from 'react'
-import { ArrowRightLeft, Eye, EyeOff, LogOut, Save, ShieldCheck } from 'lucide-react'
+import { ArrowRightLeft, Eye, EyeOff, LogOut, Save, ShieldCheck, Lock, TriangleAlert} from 'lucide-react'
 import { Button, Card, ExternalLink, SectionHeader, Select } from '@/components/ui'
 import { SteamProfileBadge } from '@/components/shared/SteamProfileBadge'
 import { useAppStore } from '@/store/useAppStore'
@@ -23,6 +24,8 @@ export function AccountSection({ busy, run, setMessage }: AccountSectionProps) {
   const hasIdentity = Boolean(settings.steamId || user?.personaName)
 
   const [apiKey, setApiKey] = useState(settings.steamApiKey)
+  // 落盘是否加密：如实展示，不做「假装安全」
+  const [keyEncrypted, setKeyEncrypted] = useState(false)
   const [steamId, setSteamId] = useState(settings.steamId)
   const [showKey, setShowKey] = useState(false)
   // V4/F2：最近账号下拉里当前选中的候选（'' = 未选择）
@@ -59,6 +62,7 @@ export function AccountSection({ busy, run, setMessage }: AccountSectionProps) {
 
   useEffect(() => {
     setApiKey(settings.steamApiKey)
+    void bridge.app.secretStatus().then((s2) => setKeyEncrypted(s2.encrypted)).catch(() => setKeyEncrypted(false))
     setSteamId(settings.steamId)
   }, [settings.steamApiKey, settings.steamId])
 
@@ -154,6 +158,20 @@ export function AccountSection({ busy, run, setMessage }: AccountSectionProps) {
               {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>
+          <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-t3">
+            {keyEncrypted ? (
+              <>
+                <Lock size={11} className="text-ok" />
+                <span className="text-ok">已用 Windows 系统加密（DPAPI）保存</span>
+                <span>· 换机器或换账户后需要重新填写</span>
+              </>
+            ) : (
+              <>
+                <TriangleAlert size={11} className="text-warn" />
+                <span className="text-warn">本机不支持系统加密，Key 以明文保存在本机配置里</span>
+              </>
+            )}
+          </p>
         </div>
         <div>
           <label className="mb-1.5 block text-[11.5px] text-t3" htmlFor="set-steamid">
