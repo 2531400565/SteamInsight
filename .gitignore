@@ -11,3 +11,11 @@ electron.vite.config.*.mjs
 
 # Windows 驱动日志（非项目文件）
 NVIDIA Corporation/
+
+# ---- 自检走查截图（本地验收用，48MB，不进仓库）----
+# README 不引用这些图，纯自检产物；留着只会让 clone 变慢。
+shots-v*/
+
+# ---- 探针 bundle（esbuild 产物，由 tools/probe-*/*.sh 或手工命令重新生成）----
+# 每次探针改动都会让这些文件整体重写，跟进版本库只会制造无意义的 diff。
+tools/**/*-bundle.cjs
