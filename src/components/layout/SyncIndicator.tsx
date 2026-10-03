@@ -5,6 +5,13 @@ import { formatRelative } from '@/utils/format'
 /**
  * 同步状态指示：绿点=正常，黄点=进行中/网络受限，红点=上次同步失败。
  * 数据来源是主进程广播的 SyncStatusPayload，不在这里做任何猜测。
+ *
+ * 「网络受限」只在**没有任何成功记录**时才显示：detection 是应用启动时取的一次快照
+ * （useAppStore.boot），之后不刷新。加速器（Watt / Steam++）刚启动那一瞬探测可能失败，
+ * 于是顶栏会把「网络受限」黄灯一直挂着，哪怕两分钟后同步成功、数据哗哗地更新了。
+ * 同步成功本身就是「链路通」最强的证据 —— 真实同步要打十几个接口，比探测严格得多，
+ * 所以 lastSyncOk === true 时一律不显示受限（useAppStore.runSync 成功后会再刷新一次
+ * detection，让标签回到准确状态）。
  */
 export function SyncIndicator() {
   const sync = useAppStore((s) => s.sync)
@@ -13,7 +20,8 @@ export function SyncIndicator() {
 
   const failed = sync.lastSyncOk === false || Boolean(sync.lastError)
   const busy = sync.running
-  const degraded = !busy && !failed && detection !== null && !detection.apiReachable
+  const syncedBefore = sync.lastSyncOk === true
+  const degraded = !busy && !failed && !syncedBefore && detection !== null && !detection.apiReachable
 
   const tone = failed ? 'danger' : busy || degraded ? 'warn' : 'ok'
   const dotClass =

@@ -65,17 +65,32 @@ export function redactUrl(url: string): string {
  * 为什么要单独一个类型：`status` 让上层能区分「配错了 API Key」和「网络抖动」，
  * 而不是把所有失败都压成一句 `请求失败`。后者正是「同步成功但游戏库是空的」这类
  * 幽灵故障的来源 —— 用户完全没有线索可以自查。
+ *
+ * `kind` 里的 `permanent` 是后补的第四类：**这个请求本身不成立，重试永远不会成功**。
  */
+export type SteamErrorKind = 'unauthorized' | 'rate_limited' | 'permanent' | 'http'
+
 export class SteamHttpError extends Error {
   constructor(
     readonly status: number,
-    readonly kind: 'unauthorized' | 'rate_limited' | 'http',
+    readonly kind: SteamErrorKind,
     message: string
   ) {
     super(message)
     this.name = 'SteamHttpError'
   }
 }
+
+/**
+ * 4xx 里除 401/403/429 之外的都算「永久失败」。
+ *
+ * 最典型的就是 `GetPlayerAchievements` 对**没有成就的游戏固定返回 400**（实测：
+ * 同一账号下 CS2 / Dota2 / TF2 / HL2 / 星露谷都是 200，而一批无成就的游戏全是 400，
+ * 且响应稳定复现）。早前 400 落进通用 `http` 类，每次同步把这种游戏重试 3 遍 ——
+ * 单轮实测 12 款 × 3 次 = 36 个注定失败的请求，还会让 appId 挂进成就重试名单
+ * （上限 5 次，即每款白跑最多 15 个请求）。重试对「请求不成立」永远没有意义。
+ */
+const PERMANENT_STATUS = new Set([400, 404, 410, 422])
 
 /**
  * GET 一个 JSON，带超时与重试。失败抛 Error。
@@ -101,24 +116,37 @@ export async function requestJson(url: string, timeoutMs = 12000, retries = 2): 
     const status = res.status
 
     if (status !== null && status >= 400) {
-      // 分三类：认证问题立刻失败（重试毫无意义，只会让用户多等两轮）、
-      // 限流用长退避重试、其余 4xx/5xx 走常规重试。
+      // 分四类：认证问题立刻失败、限流长退避重试、4xx 永久失败不重试、其余 4xx/5xx 常规重试。
       const isUnauthorized = status === 401 || status === 403
       const isRateLimited = status === 429
-      const kind = isUnauthorized ? 'unauthorized' : isRateLimited ? 'rate_limited' : 'http'
+      const isPermanent = PERMANENT_STATUS.has(status)
+      const kind: SteamErrorKind = isUnauthorized
+        ? 'unauthorized'
+        : isRateLimited
+          ? 'rate_limited'
+          : isPermanent
+            ? 'permanent'
+            : 'http'
       const err = new SteamHttpError(
         status, kind,
         isUnauthorized
           ? `Steam API Key 无效或无权访问（HTTP ${status}）：请在「设置 → 账号」重新填写 Key，并确认该账号的「游戏详情」已设为公开`
           : isRateLimited
             ? `Steam 接口返回限流（HTTP ${status}）`
-            : `HTTP ${status}`
+            : isPermanent
+              ? `HTTP ${status}：该资源不存在或没有数据（重试无意义，已跳过）`
+              : `HTTP ${status}`
       )
-      logWarn('net', 'GET rejected', { url: redactUrl(url), status, via: res.via ?? '—', ms, attempt, kind, error: res.error ?? null })
+      // 永久失败不是异常事件，用 INFO 记 —— 否则正常同步里一堆 400 会把 WARN 淹掉，
+      // 真正的限流/网络问题反而看不见了。
+      const line = { url: redactUrl(url), status, via: res.via ?? '—', ms, attempt, kind }
+      if (isPermanent) logInfo('net', 'GET skipped (permanent)', line)
+      else logWarn('net', 'GET rejected', { ...line, error: res.error ?? null })
       lastError = err
       lastWaitMs = isRateLimited ? rateLimitBackoff[attempt + 1] ?? 9000 : backoff[attempt + 1] ?? 1500
-      // 认证失败不重试：Key 错了重试一万次也是错，只会拖慢用户看到错误提示的时间
-      if (isUnauthorized) throw err
+      // 认证失败与永久失败都不重试：前者是 Key 错了，后者是请求本身不成立，
+      // 重试一万次也是一样的结果，只会拖慢用户看到错误提示的时间
+      if (isUnauthorized || isPermanent) throw err
       continue
     }
 

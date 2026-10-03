@@ -250,6 +250,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       // 所以绕过商店详情的 TTL 缓存。后台定时同步走主进程的 sync.run()，不带 force。
       const result = await bridge.sync.run({ full, source, force: true })
       if (!result.ok) set({ error: result.error ?? '同步失败' })
+      // 同步结果就是最硬的连通性证据：真同步要连打十几个接口，比启动时那次探测严格得多。
+      // 借它顺手刷新一次网络检测，顶栏的「网络受限」才不会停留在启动瞬间的过期结论上
+      // （典型场景：加速器刚启动时探测失败，之后同步成功了，标签却一直黄着）。
+      if (result.ok) void get().detect()
       return result.ok
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error) })

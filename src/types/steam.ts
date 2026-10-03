@@ -196,7 +196,7 @@ export interface WishlistItem {
   notifiedAt: number | null
 }
 
-export type DiscountCategory = 'hot' | 'lowest' | 'toprated' | 'free'
+export type DiscountCategory = 'hot' | 'lowest' | 'toprated' | 'free' | 'owned'
 
 export interface DiscountItem {
   appId: number

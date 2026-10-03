@@ -65,3 +65,7 @@ export { toCoverCacheUrl } from '../../src/components/ui/GameCover'
 // ---- V5 新增 ----
 // 优化 2：封面缓存的占用统计与清理（真实 fs，探针的 userData 指向临时目录）
 export { coverCacheStats, clearCoverCache } from '../../electron/main/cover-cache'
+
+// ---- 本轮修复（2026-10-03）----
+export { parseSearchSpecials, parsePriceTextToCents } from '../../electron/main/steam-store'
+export { coverCandidates } from '../../src/components/ui/GameCover'

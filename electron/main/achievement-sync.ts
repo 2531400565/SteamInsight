@@ -9,9 +9,9 @@
  * 同时不再每次重写 4500+ 行成就。
  */
 import type { Achievement, OwnedGame } from '@/types/steam'
-import { pool } from './api-base'
+import { pool, SteamHttpError } from './api-base'
 import * as repo from './repository'
-import { logWarn } from './logger'
+import { logInfo, logWarn } from './logger'
 import {
   getPlayerAchievements, getGlobalAchievementPercentagesForApp, getAchievementSchema
 } from './steam-api'
@@ -135,6 +135,13 @@ export async function syncAchievements(
       g.achievementsUnlocked = unlocked
       g.rareAchievements = rare
     } catch (err) {
+      // 400/404 这类「永久失败」= 该游戏压根没有成就数据（实测：无成就的游戏稳定返回 400）。
+      // 登记进重试名单等于每轮白跑 3 个请求，还把这个 appId 钉在名单里直到 ACH_MAX_RETRY
+      // —— 单轮实测 12 款 × 3 次 = 36 个注定失败的请求。直接跳过，不消耗重试预算。
+      if (err instanceof SteamHttpError && err.kind === 'permanent') {
+        logInfo('ach', '该游戏无成就数据，已跳过（不重试）', { appId: g.appId, status: err.status })
+        return
+      }
       // 单游戏失败不影响整体，但必须**登记重试**：否则它会掉出增量名单，成就数冻结在旧值。
       failed.add(g.appId)
       const n = (attempts.get(g.appId) ?? 0) + 1

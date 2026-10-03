@@ -40,6 +40,7 @@ export const RANGE_LABELS: Record<RangeKey, string> = {
 
 /** 折扣商城四个 Tab */
 export const DISCOUNT_TABS = [
+  { key: 'owned', label: '我库内打折', hint: '你已拥有的游戏里，正在打折的那几款' },
   { key: 'hot', label: '今日热门', hint: '热门且正在打折' },
   { key: 'lowest', label: '史低专区', hint: '接近历史最低价' },
   { key: 'toprated', label: '高评分折扣', hint: '好评率 ≥ 90%' },

@@ -1,12 +1,12 @@
 import { useMemo, type ReactNode } from 'react'
-import { BadgePercent, ExternalLink, Gift, Info, Star, Store, Tag, Timer } from 'lucide-react'
+import { BadgePercent, ExternalLink, Gift, Info, Library, Star, Store, Tag, Timer } from 'lucide-react'
 import { Badge, Card, EmptyState, SectionHeader, Select } from '@/components/ui'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { DiscountCard } from '@/components/shared/DiscountCard'
 import { useAppStore } from '@/store/useAppStore'
 import { useDataStore } from '@/store/useDataStore'
 import { bridge } from '@/services/bridge'
-import type { DiscountCategory, DiscountItem } from '@/types/steam'
+import type { DiscountCategory, DiscountItem, OwnedGame } from '@/types/steam'
 import { DISCOUNT_TABS } from '@/utils/constants'
 import { formatMoney } from '@/utils/format'
 import { usePersistedState } from '@/hooks/usePersistedState'
@@ -52,6 +52,28 @@ function filterByTab(items: DiscountItem[], tab: DiscountCategory): DiscountItem
   }
 }
 
+/**
+ * 「我库内打折」：**不额外发任何请求**，直接用游戏库里的现价/原价算。
+ *
+ * 库里每款游戏的价格本来就随每次同步刷新（appdetails，12 小时 TTL），
+ * 于是「我拥有的哪些游戏正在打折」这个最贴合本软件定位的问题，答案已经在本地数据库里。
+ * 史低标记也直接沿用 games 表的判定结果，与「史低专区」口径一致。
+ */
+function ownedDeals(games: OwnedGame[]): DiscountItem[] {
+  const now = Math.floor(Date.now() / 1000)
+  return games
+    .filter((g) => g.priceCents > 0 && g.originalPriceCents > g.priceCents)
+    .map((g) => ({
+      appId: g.appId, name: g.name, headerImage: g.headerImage,
+      originalPriceCents: g.originalPriceCents, finalPriceCents: g.priceCents,
+      discountPercent: Math.round((1 - g.priceCents / g.originalPriceCents) * 100),
+      currency: 'CNY', isHistoricalLow: g.isHistoricalLow, historicalLowCents: g.priceCents,
+      reviewPercent: g.reviewPercent, reviewCount: g.reviewCount, tags: g.tags, releaseDate: g.releaseDate,
+      storeUrl: `https://store.steampowered.com/app/${g.appId}/`,
+      category: 'owned' as const, endsAt: null, fetchedAt: now, notifiedAt: null
+    }))
+}
+
 export default function StorePage() {
   const snapshot = useDataStore((s) => s.snapshot)
   const navigate = useAppStore((s) => s.navigate)
@@ -62,7 +84,13 @@ export default function StorePage() {
   const discounts = snapshot?.discounts ?? []
   const wishlistAppIds = useMemo(() => new Set((snapshot?.wishlist ?? []).map((w) => w.appId)), [snapshot])
 
-  const items = useMemo(() => sortItems(filterByTab(discounts, tab), sort), [discounts, tab, sort])
+  // 「我库内打折」来自游戏库本地价格（零请求），与全站促销池是两套数据源
+  const owned = useMemo(() => ownedDeals(snapshot?.games ?? []), [snapshot?.games])
+  const tabItems = useMemo(
+    () => (tab === 'owned' ? owned : filterByTab(discounts, tab)),
+    [owned, discounts, tab]
+  )
+  const items = useMemo(() => sortItems(tabItems, sort), [tabItems, sort])
 
   const stats = useMemo(() => {
     const lows = discounts.filter((d) => d.isHistoricalLow).length
@@ -85,7 +113,7 @@ export default function StorePage() {
       <PageHeader
         icon={<Store size={19} />}
         title="折扣商城"
-        subtitle="按「今日热门 / 史低专区 / 高评分折扣 / 限时免费」四个维度浏览在售折扣。价格取自 Steam 中国区商店接口（cc=cn），点击卡片可直接跳转商店。"
+        subtitle="按「我库内打折 / 今日热门 / 史低专区 / 高评分折扣 / 限时免费」浏览折扣。「我库内打折」只看你自己的库；其余四类来自 Steam 中国区商店接口（cc=cn），点击卡片可直接跳转商店。"
         action={
           <>
             <Badge tone="warn" icon={<BadgePercent size={11} />}>
@@ -102,7 +130,7 @@ export default function StorePage() {
       <div className="flex flex-wrap items-center gap-2">
         {DISCOUNT_TABS.map((t) => {
           const active = tab === t.key
-          const count = filterByTab(discounts, t.key).length
+          const count = t.key === 'owned' ? owned.length : filterByTab(discounts, t.key).length
           return (
             <button
               key={t.key}
@@ -125,6 +153,7 @@ export default function StorePage() {
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatBox icon={<BadgePercent size={16} />} label="在售折扣" value={`${discounts.length} 款`} hint="本次同步抓取到的全部折扣条目" />
+        <StatBox icon={<Library size={16} />} label="我库内打折" value={`${owned.length} 款`} hint="你已拥有且正在打折的游戏" />
         <StatBox icon={<Tag size={16} />} label="达到史低" value={`${stats.lows} 款`} hint="现价 ≤ 本机历史采样最低价" />
         <StatBox icon={<Gift size={16} />} label="限时免费" value={`${stats.free} 款`} hint="当前价格为零" />
         <StatBox
@@ -154,9 +183,11 @@ export default function StorePage() {
               title="这个分类下暂时没有数据"
               description={
                 snapshot.user?.source === 'api'
-                  ? tab === 'lowest'
-                    ? '「史低」以本机 price_history 累计采样到的最低价为基准，至少需要两次跨天同步才有可比数据。'
-                    : '这三个专区由同一批折扣按维度筛出：「高评分折扣」要求好评率 ≥ 90%，「限时免费」要求 Steam 当前存在 100% 折扣活动；当前没有对应促销时为空属正常。'
+                  ? tab === 'owned'
+                    ? '「我库内打折」直接读游戏库里已缓存的价格（每次同步刷新，12 小时内可能有一次延迟）。你现在没有任何已拥有的游戏在打折 —— 这通常是好事，说明你的库买得很准。'
+                    : tab === 'lowest'
+                      ? '「史低」以本机 price_history 累计采样到的最低价为基准，至少需要两次跨天同步才有可比数据。'
+                      : '这三个专区由同一批折扣按维度筛出：「高评分折扣」要求好评率 ≥ 90%，「限时免费」要求 Steam 当前存在 100% 折扣活动；当前没有对应促销时为空属正常。'
                   : '先完成一次数据同步，或切换到其它分类。'
               }
             />

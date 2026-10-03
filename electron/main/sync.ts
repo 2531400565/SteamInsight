@@ -16,7 +16,7 @@ import { detectSteam } from './steam-detect'
 import { pool } from './api-base'
 import { syncAchievements } from './achievement-sync'
 import { getPlayerSummaries, getOwnedGames, getPlayerProfile, getWishlist } from './steam-api'
-import { storeAppDetails, storeFeaturedCategories } from './steam-store'
+import { storeAppDetails, storeFeaturedCategories, storeSearchSpecials, type SearchSpecialItem } from './steam-store'
 import { notify } from './notifications'
 import { markDiscountsNotified, markWishlistNotified, planNotifications, type NotifySource } from './notify-plan'
 import { logError, logInfo, logWarn } from './logger'
@@ -210,6 +210,34 @@ async function buildApiData(settings: ReturnType<typeof getSettings>, force: boo
     if (s && s.priceCents === 0 && s.originalPriceCents > 0) pushDiscount(s, 'free')
   })
 
+  // 折扣池扩容：featuredcategories 的 specials 恒定只有 10 条（实测 cc=cn/cc=us 都是 10，
+  // 它给的是「今日精选」而非全部促销），所以「在售折扣只有 9 款」是源头上限，不是采集失败。
+  // 搜索接口一次给几十条，且单条已含中文名/现价/原价/折扣率/好评率，**无需再逐条打 appdetails**
+  // —— 折扣条目没有 TTL 缓存，每多一条就是每轮多两个请求，代价必须算清楚。
+  // 拿不到 tags / 评测数量，所以这些条目 reviewPercent 之外的信息较薄，不参与「高评分折扣」筛选。
+  const searchSpecials = await storeSearchSpecials().catch(() => [] as SearchSpecialItem[])
+  let addedFromSearch = 0
+  for (const it of searchSpecials) {
+    if (added.has(it.appId)) continue
+    // 100% 折扣（现价 0）归 free —— 与上面 specials 的判定保持同一套口径
+    const category: DiscountItem['category'] = it.finalPriceCents === 0 && it.originalPriceCents > 0 ? 'free' : 'hot'
+    if (category === 'hot' && it.finalPriceCents <= 0) continue
+    added.add(it.appId)
+    addedFromSearch += 1
+    discounts.push({
+      appId: it.appId, name: it.name, headerImage: it.headerImage,
+      originalPriceCents: it.originalPriceCents, finalPriceCents: it.finalPriceCents,
+      discountPercent: it.discountPercent, currency: 'CNY',
+      isHistoricalLow: false, historicalLowCents: -1,
+      reviewPercent: it.reviewPercent, reviewCount: it.reviewCount, tags: [], releaseDate: it.releaseDate,
+      storeUrl: `https://store.steampowered.com/app/${it.appId}/`, category,
+      // endsAt 只有 featuredcategories 给了；搜索结果里没有促销到期时间，卡片不显示倒计时、
+      // 「即将结束优先」排序里这些条目会排在最后（不猜，避免显示错误的截止时间）。
+      endsAt: null, fetchedAt: now, notifiedAt: null
+    })
+  }
+  logInfo('sync', '折扣池', { featured: featured.specials.length, searchParsed: searchSpecials.length, addedFromSearch, total: discounts.length })
+
   // 价格采样 + 史低判定：游戏库、愿望单、折扣条目统一采样。
   // 早前只采样游戏库，折扣商品从不进 price_history →「史低专区」永远算不出来。
   const samples: Array<{ appId: number; priceCents: number; originalPriceCents: number }> = []
@@ -393,7 +421,15 @@ export async function run(options?: SyncRunOptions): Promise<{ ok: boolean; erro
 
     if (source === 'api') {
       update({ phase: 'detecting', message: '检测 Steam 客户端与网络', progress: 5 })
-      await detectSteam().catch(() => null)
+      // 这条检测以前是把结果扔掉的死代码（`await detectSteam().catch(() => null)`），
+      // 于是「启动瞬间探测失败」会一直挂在顶栏上。现在把结论写进日志：
+      // 同步成功而这里显示 API 不可达，说明探测端点本身需要复核（而不是网络真有问题）。
+      const det = await detectSteam().catch(() => null)
+      if (det) {
+        logInfo('sync', '网络检测结论', {
+          apiReachable: det.apiReachable, storeReachable: det.storeReachable, apiLatencyMs: det.apiLatencyMs
+        })
+      }
     } else {
       update({ phase: 'detecting', message: '演示模式：跳过本地检测', progress: 5 })
     }

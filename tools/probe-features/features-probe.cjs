@@ -785,6 +785,62 @@ app.whenReady().then(async () => {
     eq('N13 目录不存在 → 统计 0/0、清理安全', [B.coverCacheStats().count, B.coverCacheStats().totalBytes, B.clearCoverCache().ok], [0, 0, true])
   }
 
+  // ============ O 组：2026-10-03 三项修复的纯函数 ============
+  console.log('\n=== O 折扣池扩容 / 封面候选链 / 400 永久失败 ===')
+  {
+    // O1 价格文本解析：本地化写法都要能落到「分」
+    eq('O1a ¥136.00 → 13600 分', B.parsePriceTextToCents('¥136.00'), 13600)
+    eq('O1b ¥1,234.56 → 123456 分（千分位）', B.parsePriceTextToCents('¥1,234.56'), 123456)
+    eq('O1c 解析不了 → -1', B.parsePriceTextToCents('—'), -1)
+
+    // O2 results_html 解析：真实结构裁剪版（字段齐全的正常条目 + 各种残缺条目）
+    const row = (appid, title, finalC, origText, pct, review) =>
+      `<a href="https://store.steampowered.com/app/${appid}/x" data-ds-appid="${appid}">` +
+      `<div class="search_capsule"><img src="https://cdn/x/steam/apps/${appid}/capsule_231x87.jpg"></div>` +
+      `<div class="search_name ellipsis"><span class="title">${title}</span></div>` +
+      `<div class="search_released responsive_secondrow"> 2024 年 3 月 5 日 </div>` +
+      `<div class="search_reviewscore"><span data-tooltip-html="有 ${review}% 为好评"></span></div>` +
+      `<div class="search_price_discount_combined" data-price-final="${finalC}">` +
+      `<div class="discount_block" data-discount="${pct}">` +
+      (origText === null ? '' : `<div class="discount_prices"><div class="discount_original_price">${origText}</div>`) +
+      `<div class="discount_pct">-${pct}%</div></div></div></a>`
+    const html = [
+      row(1304930, 'The Outlast Trials', 1360, '¥136.00', 90, 88),
+      row(1091500, '赛博朋克 2077', 1799, '¥59.99', 70, 80),
+      // 原价文本缺失 → 应按折扣率反推（1799 / 0.3 = 5997）
+      row(1174180, 'Red Dead Redemption 2', 1799, null, 70, 90),
+      // 无折扣（现价 == 原价）→ 必须被剔掉
+      row(413150, '星露谷物语', 4900, '¥49.00', 0, 95),
+      // 残缺行：没有 data-price-final → 跳过
+      '<a data-ds-appid="999999"><span class="title">坏行</span></a>'
+    ].join('\n')
+    const items = B.parseSearchSpecials(html, 40)
+    eq('O2a 解析出 3 条（坏行与无折扣行被剔除）', items.length, 3)
+    eq('O2b 中文名与现价正确', [items[1].name, items[1].finalPriceCents], ['赛博朋克 2077', 1799])
+    eq('O2c 原价文本解析', items[0].originalPriceCents, 13600)
+    eq('O2d 原价缺失时按折扣率反推', items[2].originalPriceCents, 5997)
+    eq('O2e 折扣率与好评率', [items[0].discountPercent, items[1].reviewPercent], [90, 80])
+    eq('O2f limit 生效', B.parseSearchSpecials(html, 2).length, 2)
+    eq('O2g 空 HTML → 空数组（降级不炸）', B.parseSearchSpecials('', 40).length, 0)
+
+    // O3 封面候选链：header.jpg 缺失时要有别的尺寸可试
+    const cands = B.coverCandidates('https://cdn.cloudflare.steamstatic.com/steam/apps/2661300/header.jpg')
+    eq('O3a 候选含 header + 两种 capsule', cands.length >= 3 && cands[0].endsWith('/header.jpg'), true)
+    ok('O3b 候选都是同 appid', cands.every((u) => u.includes('/apps/2661300/')), JSON.stringify(cands))
+    // 带 hash 段的 store_item_assets 形态（featuredcategories / 搜索结果里的真实 URL）
+    const hashed = B.coverCandidates('https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1304930/4aaf4d/capsule_616x353_alt.jpg')
+    ok('O3c hash 段形态也走候选链', hashed.length >= 2, JSON.stringify(hashed))
+    eq('O3d 非 Steam CDN 原样放行', B.coverCandidates('https://example.com/a/b.jpg'), ['https://example.com/a/b.jpg'])
+    eq('O3e 空串 → 空数组', B.coverCandidates('').length, 0)
+
+    // O4 400 必须被归为 permanent（决定成就同步不重试）
+    const e400 = new B.SteamHttpError(400, 'permanent', 'x')
+    const e429 = new B.SteamHttpError(429, 'rate_limited', 'x')
+    const e403 = new B.SteamHttpError(403, 'unauthorized', 'x')
+    ok('O4 三种错误的 kind 各自独立', [e400.kind, e429.kind, e403.kind].join(',') === 'permanent,rate_limited,unauthorized')
+    ok('O5 400 不被误判成可重试的 http', e400.kind !== 'http')
+  }
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'HAS FAILURE'}  pass=${pass} fail=${fail}`)
   if (failures.length) console.log('失败项：\n  - ' + failures.join('\n  - '))
   console.log(`临时 userData: ${TMP}`)
