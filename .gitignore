@@ -18,4 +18,4 @@ shots-v*/
 
 # ---- 探针 bundle（esbuild 产物，由 tools/probe-*/*.sh 或手工命令重新生成）----
 # 每次探针改动都会让这些文件整体重写，跟进版本库只会制造无意义的 diff。
-tools/**/*-bundle.cjs
+*-bundle.cjs
