@@ -166,6 +166,7 @@ function createPreviewApi(): SteamInsightApi {
 
   return {
     app: {
+    secretStatus: async () => ({ encrypted: false }),
       info: async () => ({
         version: '1.0.0',
         electron: '—',
@@ -330,7 +331,20 @@ function createPreviewApi(): SteamInsightApi {
       wrapped: async () => ({ ok: false, error: '预览模式下无法导出文件，请从桌面应用操作' }),
       table: async () => ({ ok: false, error: '预览模式下无法导出文件，请从桌面应用操作' })
     },
+    price: {
+      history: async () => []
+    },
+    store: {
+      // 预览模式没有主进程，搜索必然失败：如实返回空数组，界面显示「没搜到」而不是假装有结果
+      search: async () => []
+    },
+    ach: {
+      query: async () => ({ rows: [], total: 0 }),
+      backfill: async () => ({ ok: false, attempted: 0, added: 0, failed: 0, error: '浏览器预览模式下无法抓取成就，请从桌面应用操作' }),
+      onBackfillProgress: () => () => undefined
+    },
     net: {
+      apiHealth: async () => [],
       // 预览模式没有主进程，无法做真实探测。如实返回「不可用」而不是编造一份看起来正常的结论。
       diagnose: async () => ({
         checkedAt: Date.now(),
@@ -345,7 +359,23 @@ function createPreviewApi(): SteamInsightApi {
         actions: ['用打包后的桌面版启动（npm run dev 或安装包）'],
         config: { apiKeySet: false, steamIdSet: false, demoDataEnabled: true, autoSync: false, syncIntervalMin: 30, activeSource: 'demo' as const },
         configWarning: null
-      })
+      }),
+      // hosts 守卫：预览模式既读不到系统 hosts，也写不了。如实说「不可用」，
+      // 绝不用假数据冒充「检测到 15 条劫持」——那种面板比没有更危险。
+      hostsStatus: async () => ({
+        path: '',
+        hijacked: [],
+        kept: [],
+        disabled: [],
+        localProxyListening: false,
+        checkedAt: Date.now()
+      }),
+      hostsPlan: async () => ({ disable: [], kept: [], changed: false }),
+      hostsApply: async () => ({ ok: false, disabledCount: 0, backupFile: null, error: '浏览器预览模式下无法修改系统 hosts，请从桌面应用操作', verified: false }),
+      hostsBackups: async () => [],
+      hostsRestore: async () => ({ ok: false, disabledCount: 0, backupFile: null, error: '浏览器预览模式下无法修改系统 hosts', verified: false }),
+      proxyApply: async () => ({ applied: false, label: '未知', error: '浏览器预览模式下无法设置代理，请从桌面应用操作' }),
+      proxyTest: async () => ({ ok: false, via: null, ms: 0, error: '浏览器预览模式下无法测试代理，请从桌面应用操作' })
     },
     diag: {
       exportPack: async () => ({ ok: false, error: '预览模式下无法导出诊断包，请从桌面应用操作' })

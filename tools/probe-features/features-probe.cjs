@@ -841,6 +841,239 @@ app.whenReady().then(async () => {
     ok('O5 400 不被误判成可重试的 http', e400.kind !== 'http')
   }
 
+  // ============ P 组：hosts 外科手术式还原（核心是「绝不能误伤别的行」）============
+  console.log('\n=== P hosts 还原 / 代理归一化 ===')
+  {
+    // 用实测过的真实结构：Steam 15 条 + GitHub 25 条 + Docker Hub / HF / YouTube / 油猴
+    const S = (d) => `127.0.0.1 ${d}`
+    const real = [
+      '# Copyright (c) 1993-2009 Microsoft Corp.',
+      '# Steam++ Start',
+      S('store.steampowered.com'),
+      S('api.steampowered.com'),
+      S('login.steampowered.com'),
+      S('steamcommunity.com'),
+      S('cdn.akamai.steamstatic.com'),
+      S('hub.docker.com'),
+      S('huggingface.co'),
+      S('img.youtube.com'),
+      S('github.com'),
+      S('raw.githubusercontent.com'),
+      S('api.github.com'),
+      S('greasyfork.org'),
+      '# Steam++ End',
+      '',
+      '192.168.1.10 my-nas.local',
+      '127.0.0.1 nacos-server'
+    ].join('\r\n')
+
+    const plan = B.planHostsRewrite(real)
+    eq('P1a 精确识别 5 条 Steam 劫持（不误伤 GitHub/Docker/HF）', plan.disable.length, 5)
+    ok('P1b 被注释的全是 Steam 域名', plan.disable.every((l) => /127\.0\.0\.1 (store|api|login)\.steampowered\.com|steamcommunity\.com|cdn\.akamai\.steamstatic\.com/.test(l)), JSON.stringify(plan.disable))
+    ok('P1c hub.docker.com 未被改动', plan.next.includes('127.0.0.1 hub.docker.com') && !plan.next.includes('# 127.0.0.1 hub.docker.com'))
+    ok('P1d huggingface / github / 油猴全部保留', ['huggingface.co', 'github.com', 'raw.githubusercontent.com', 'api.github.com', 'greasyfork.org'].every((d) => plan.next.includes(`127.0.0.1 ${d}`)))
+    ok('P1e 本机自定义条目（NAS / nacos）原样保留', plan.next.includes('192.168.1.10 my-nas.local') && plan.next.includes('127.0.0.1 nacos-server'))
+    ok('P1f 行数不变（只加注释前缀，不删行）', plan.next.split(/\r\n/).length === real.split(/\r\n/).length)
+    ok('P1g 保留 CRLF 风格', plan.next.includes('\r\n'))
+    eq('P1h kept 只含非 Steam 生效行（7 条加速器条目 + 2 条本机自定义）', plan.kept.length, 9)
+    ok('P1h+ kept 里没有 Steam 条目', plan.kept.every((l) => !/steampowered|steamcommunity|steamstatic/.test(l)), JSON.stringify(plan.kept))
+    eq('P1i changed 为真', plan.changed, true)
+
+    // 幂等：再跑一次不应产生新的改动
+    const again = B.planHostsRewrite(plan.next)
+    eq('P2a 幂等（第二次跑无新改动）', [again.disable.length, again.changed], [0, false])
+
+    // 已注释的 Steam 行不能被重复处理，也不能被误认为「需要还原」
+    const preDisabled = ['# Steam++ Start', '# 127.0.0.1 store.steampowered.com', '# Steam++ End'].join('\n')
+    const p3 = B.planHostsRewrite(preDisabled)
+    eq('P2b 已注释的 Steam 行不重复处理', [p3.disable.length, p3.changed], [0, false])
+
+    // 边界：非白名单域名即使指向 127.0.0.1 也不能动
+    const tricky = ['127.0.0.1 evil.steampowered.com.attacker.com', '127.0.0.1 steamcommunity.com.evil.net', '0.0.0.0 store.steampowered.com'].join('\n')
+    const p4 = B.planHostsRewrite(tricky)
+    eq('P2c 相似域名（后缀攻击）不被误判', p4.disable.length, 1)
+    ok('P2d 0.0.0.0 形式也识别为 Steam 条目', p4.disable[0].includes('0.0.0.0 store.steampowered.com'))
+    eq('P2e 空内容不炸', B.planHostsRewrite('').disable.length, 0)
+
+    // 白名单本身：必须是完整域名，不含通配
+    ok('P3 白名单里没有通配符', B.STEAM_HIJACK_DOMAINS.every((d) => !d.includes('*') && d.includes('.')))
+
+    // 代理归一化
+    eq('P4a 127.0.0.1:7890 原样', B.normalizeProxyText('127.0.0.1:7890'), '127.0.0.1:7890')
+    eq('P4b http:// 前缀被剥掉', B.normalizeProxyText('http://127.0.0.1:7890'), '127.0.0.1:7890')
+    eq('P4c 末尾斜杠/路径被去掉', B.normalizeProxyText('127.0.0.1:7890/'), '127.0.0.1:7890')
+    eq('P4d 空值 → 空（跟随系统）', [B.normalizeProxyText(''), B.normalizeProxyText('   '), B.normalizeProxyText(null)], ['', '', ''])
+    eq('P4e 非法输入 → 空而不是原样透传', [B.normalizeProxyText('abc'), B.normalizeProxyText('127.0.0.1'), B.normalizeProxyText('127.0.0.1:99999')], ['', '', ''])
+    eq('P4f IPv6 形式允许', B.normalizeProxyText('[::1]:7890'), '[::1]:7890')
+
+    // hostsVerdict：三种状态三种说法（顶栏与设置页共用，措辞必须一致）
+    const P = 'C:////Windows////System32////drivers////etc////hosts'
+    const v1 = B.hostsVerdict({ hijacked: [], kept: [], disabled: [], localProxyListening: false, path: P, checkedAt: 0 })
+    const v2 = B.hostsVerdict({ hijacked: ['127.0.0.1 api.steampowered.com'], kept: [], disabled: [], localProxyListening: true, path: P, checkedAt: 0 })
+    const v3 = B.hostsVerdict({ hijacked: ['127.0.0.1 api.steampowered.com'], kept: [], disabled: [], localProxyListening: false, path: P, checkedAt: 0 })
+    const v0 = B.hostsVerdict({ hijacked: [], kept: [], disabled: [], localProxyListening: false, path: '', checkedAt: 0 })
+    eq('P5a 干净 → ok', [v1.tone, v1.short], ['ok', 'hosts 干净'])
+    eq('P5b 接管中 → ok', [v2.tone, v2.short], ['ok', '加速器接管中'])
+    eq('P5c 劫持残留 → warn', [v3.tone, v3.short], ['warn', '劫持残留'])
+    ok('P5d 残留时说明里点明真实原因', /加速器/.test(v3.detail) && /同步失败/.test(v3.detail), v3.detail)
+    // path 为空 = 预览模式读不到系统 hosts：必须说「无法检测」，不能顺着空数组说成「干净」
+    eq('P5e 读不到 hosts 时不谎报干净', [v0.tone, v0.short], ['neutral', '无法检测'])
+  }
+
+  // ============ Q 组：折扣清理决策（防「40 款掉回 9 款」回归）============
+  console.log('\n=== Q 折扣清理：没查到 ≠ 已下架 ===')
+  {
+    const bad = B.planDiscountPurge(false, 0)
+    const empty = B.planDiscountPurge(true, 0)
+    const good = B.planDiscountPurge(true, 40)
+    eq('Q1a 数据源不可用 → 不清理', bad.purge, false)
+    ok('Q1b 原因写明「不把没查当成已下架」', /沿用上次结果/.test(bad.reason), bad.reason)
+    eq('Q2a 可信但本轮为空 → 不清理（清空没有意义）', empty.purge, false)
+    eq('Q3a 可信且有数据 → 正常清理', good.purge, true)
+    // 这条就是回归本身：09:33 写 40 条，09:55 源失效被清成 9 条
+    ok('Q4 回归场景已被拦住（源失效 + 本轮 0 条 → 不清理）', B.planDiscountPurge(false, 0).purge === false)
+  }
+
+  // ============ R 组：成就按需查询（真实临时库，验证 SQL 与过滤口径）============
+  console.log('\n=== R 成就按需查询 ===')
+  {
+    const A = (appId, apiName, unlocked, isRare) => ({
+      appId, apiName, displayName: apiName, description: '', iconUrl: '', iconGrayUrl: '',
+      unlocked, unlockedAt: unlocked ? 1700000000 : null, globalPercent: isRare ? 3 : 50, isRare, hidden: false
+    })
+    // 用独立高位 appId 段（9001+）：临时库里已有其它探针组写入的成就，
+    // 沿用 100/200/300 会与它们串味，断言就会变成「测别人的数据」。
+    B.saveAchievements([
+      A(9001, 'a1', true, false), A(9001, 'a2', false, true), A(9001, 'a3', false, false),
+      A(9002, 'b1', true, true), A(9002, 'b2', false, false),
+      A(9003, 'c1', false, true)
+    ])
+
+    const mine = (extra) => B.queryAchievements({ limit: 0, ...extra }).rows.filter((r) => r.appId >= 9001 && r.appId <= 9003)
+    eq('R1 本组写入 6 条', mine().length, 6)
+    eq('R1b total 反映全库真实总数（不只本组）', typeof B.queryAchievements({ limit: 0 }).total, 'number')
+
+    const one = B.queryAchievements({ appId: 9001, limit: 0 })
+    eq('R2 按 appId 过滤', [one.rows.length, one.total], [3, 3])
+
+    eq('R3 只看已解锁', mine({ onlyUnlocked: true }).length, 2)
+
+    const hunt = mine({ rareOnly: true })
+    eq('R4 追猎口径 = 稀有且未解锁', hunt.length, 2)
+    ok('R4b 追猎结果里没有已解锁的稀有成就', hunt.every((r) => r.isRare && !r.unlocked))
+
+    const page1 = B.queryAchievements({ appId: 9001, limit: 2, offset: 0 })
+    const page2 = B.queryAchievements({ appId: 9001, limit: 2, offset: 2 })
+    eq('R5 分页：2+1 覆盖全部', [page1.rows.length, page2.rows.length], [2, 1])
+    const overlap = page1.rows.filter((a) => page2.rows.some((b) => b.apiName === a.apiName))
+    eq('R5b 分页不重叠', overlap.length, 0)
+
+    // limit 上限保护：超过 5000 要被夹住，不能拼出超大 SQL
+    const capped = B.queryAchievements({ limit: 999999 }).rows.length
+    ok('R6 limit 被夹到 5000（返回条数不超过 5000）', capped <= 5000)
+
+    B.setAchievementCounts(9001, 3, 1, 1)
+    const counts = B.queryAchievements({ appId: 9001, limit: 0 })
+    eq('R7 计数回写后按需查询仍一致', counts.rows.length, 3)
+  }
+
+  // ============ S 组：生涯聚合 / 价格按需 / 保留策略 ============
+  console.log('\n=== S 生涯聚合与价格按需 ===')
+  {
+    // S1 生涯聚合：空输入不能炸
+    const empty = B.buildCareer([], [], [], 24, Date.UTC(2026, 9, 3) / 1000)
+    eq('S1a 空输入返回 24 个月占位', empty.months.length, 24)
+    eq('S1b 空输入统计为 0', [empty.totalMinutes, empty.totalAchievements, empty.libraryValueCents], [0, 0, 0])
+    eq('S1c 月份升序', empty.months[0].month <= empty.months[23].month, true)
+
+    // S2 有数据时正确归月
+    const nowSec = Math.floor(Date.UTC(2026, 9, 3) / 1000)
+    const day = 86400
+    const mkGame = (appId, firstOffsetDays, original) => ({
+      appId, name: 'G' + appId, headerImage: '', capsuleImage: '', genres: [], tags: [], releaseDate: '', developer: '', publisher: '',
+      priceCents: 100, originalPriceCents: original, priceCheckedAt: null, isHistoricalLow: false, reviewPercent: 0, reviewCount: 0,
+      playtimeForeverMin: 0, playtimeTwoWeeksMin: 0, firstPlayedAt: nowSec - firstOffsetDays * day, lastPlayedAt: null,
+      achievementsTotal: 0, achievementsUnlocked: 0, rareAchievements: 0, firstPlayedEstimated: false
+    })
+    const mkAch = (appId, apiName, unlocked, offsetDays) => ({
+      appId, apiName, displayName: apiName, description: '', iconUrl: '', iconGrayUrl: '',
+      unlocked, unlockedAt: unlocked ? nowSec - offsetDays * day : null, globalPercent: 10, isRare: false, hidden: false
+    })
+    const c2 = B.buildCareer(
+      [{ appId: 1, playDate: '2026-09-01', minutes: 120 }, { appId: 1, playDate: '2026-09-01', minutes: 60 }],
+      [mkAch(1, 'a', true, 5), mkAch(1, 'b', false, 0)],
+      [mkGame(1, 40, 19900), mkGame(2, 3, 5900)],
+      24, nowSec
+    )
+    const sep = c2.months.find((m) => m.month === '2026-09')
+    ok('S2a 会话按月汇总', sep && sep.minutes === 180, JSON.stringify(sep))
+    ok('S2b 成就按解锁月归集', sep && sep.achievements === 1)
+    const aug = c2.months.find((m) => m.month === '2026-08')
+    ok('S2c 新游戏按首玩月归集', aug && aug.newGames === 1 && aug.spentCents === 19900, JSON.stringify(aug))
+    eq('S2d 库原价总额', c2.libraryValueCents, 19900 + 5900)
+
+    // S3 价格按需查询（真实临时库）
+    const today = Math.floor(Date.now() / 1000)
+    B.savePriceHistory([
+      { appId: 7001, capturedAt: today - 2 * 86400, priceCents: 1000, originalPriceCents: 2000, discountPercent: 50, isHistoricalLow: false },
+      { appId: 7001, capturedAt: today - 86400, priceCents: 800, originalPriceCents: 2000, discountPercent: 60, isHistoricalLow: false },
+      { appId: 7001, capturedAt: today, priceCents: 600, originalPriceCents: 2000, discountPercent: 70, isHistoricalLow: false },
+      { appId: 7002, capturedAt: today, priceCents: 5000, originalPriceCents: 5000, discountPercent: 0, isHistoricalLow: false }
+    ])
+    const only7001 = B.queryPriceHistory({ appIds: [7001], limit: 0 })
+    eq('S3a 按 appId 过滤', only7001.length, 3)
+    // 3 条分别在 0/1/2 天前；窗口 1 天 = 86400s，「恰好 1 天前」那条落在窗口内（边界含端点）
+    const one = B.queryPriceHistory({ appIds: [7001], sinceDays: 1, limit: 0 })
+    eq('S3b sinceDays 生效（0/1 天前命中，2 天前排除）', one.length, 2)
+    const half = B.queryPriceHistory({ appIds: [7001], sinceDays: 0.5, limit: 0 })
+    eq('S3b+ 窗口收窄到 12 小时只剩今天', half.length, 1)
+    const daily = B.queryPriceHistory({ appIds: [7001], daily: true, limit: 0 })
+    ok('S3c daily 收敛（3 条分布在 3 天 → 仍是 3 条，但同一天多笔会合并）', daily.length <= one.length + 3, `${daily.length}`)
+    // 传空数组 = 「什么都不要」，不能退化成「全部」（否则空数据页面会拉回整张表）
+    eq('S3d 空 appId 列表返回空（不退化为全部）', B.queryPriceHistory({ appIds: [] }).length, 0)
+    ok('S3d+ 不传 appIds 才是全部', B.queryPriceHistory({ limit: 0 }).length >= 4)
+    eq('S3e 不存在的 appId 返回空', B.queryPriceHistory({ appIds: [999999] }).length, 0)
+
+    // S4 保留策略常量：快照保留数必须够画趋势
+    ok('S4a 快照保留 ≥ 12（至少一年每月一个点）', B.SNAPSHOT_KEEP_ROWS >= 12, String(B.SNAPSHOT_KEEP_ROWS))
+    ok('S4b 价格保留天数不变（90 天，史低判定依赖它）', B.SAMPLE_KEEP_DAYS === 90, String(B.SAMPLE_KEEP_DAYS))
+  }
+
+  // ============ T 组：安全（外链白名单 / 脱敏 / 回退编解码）============
+  console.log('\n=== T 安全 ===')
+  {
+    // T1 外链白名单：这是「渲染层 XSS → 本地程序执行」的唯一闸门
+    ok('T1a 放行 https', B.isSafeExternalUrl('https://store.steampowered.com/app/730/'))
+    ok('T1b 放行 http', B.isSafeExternalUrl('http://example.com'))
+    ok('T1c 放行 mailto', B.isSafeExternalUrl('mailto:someone@example.com'))
+    // 这些是真正危险的那一类
+    ok('T1d 拦截 file://（可打开任意本地文件/程序）', !B.isSafeExternalUrl('file:///C:/Windows/System32/calc.exe'))
+    ok('T1e 拦截 file:// 的 UNC 形式', !B.isSafeExternalUrl('file://\\\\evil\\share\\x.exe'))
+    ok('T1f 拦截 ms-msdt:（Follina 类利用链）', !B.isSafeExternalUrl('ms-msdt:/id'))
+    ok('T1g 拦截 javascript:（XSS 常用）', !B.isSafeExternalUrl('javascript:alert(1)'))
+    ok('T1h 拦截 data:（可伪造页面）', !B.isSafeExternalUrl('data:text/html,<script>1</script>'))
+    ok('T1i 拦截 smb:（内网横向）', !B.isSafeExternalUrl('smb://attacker/share'))
+    ok('T1j 非字符串/空串/超长一律拒', [!B.isSafeExternalUrl(null), !B.isSafeExternalUrl(''), !B.isSafeExternalUrl('https://a.com/' + 'x'.repeat(3000))].every(Boolean))
+    ok('T1k 大小写混淆不绕过', !B.isSafeExternalUrl('FILE:///C:/Windows/x.exe') && !B.isSafeExternalUrl('JavaScript:alert(1)'))
+    ok('T1l 畸形 URL 不抛异常', !B.isSafeExternalUrl('http://'))
+    ok('T1m 白名单只含三种协议', JSON.stringify(B.SAFE_EXTERNAL_PROTOCOLS) === JSON.stringify(['http:', 'https:', 'mailto:']))
+
+    // T2 诊断包里的 steamid 脱敏（本地日志保持原样，分享时才打码）
+    const sid = '76561198346667289'
+    const masked = B.redactSteamId(`GET url=https://api.steampowered.com/x?steamid=${sid}&key=secret`)
+    ok('T2a 完整 steamid 不再出现', !masked.includes(sid), masked)
+    ok('T2b 保留首尾便于排障', masked.includes('7656') && masked.includes(sid.slice(-4)), masked)
+    ok('T2c 非 steamid 文本不受影响', B.redactSteamId('价格 100 元 achievements=3') === '价格 100 元 achievements=3')
+    // 短数字不能被误伤（例如 appid、金额）
+    ok('T2d 短数字不被误伤', !B.redactSteamId('appid=730 price=1990').includes('…'), B.redactSteamId('appid=730 price=1990'))
+
+    // T3 加密不可用时的回退：绝不能因为没有 safeStorage 就把 Key 丢掉
+    const c = B.plainCodec()
+    eq('T3a 回退编解码是恒等的', c.decode(c.encode('ABC123')), 'ABC123')
+    ok('T3b 回退模式如实标记为未加密', c.encrypted === false)
+    eq('T3c 空 Key 也能安全往返', c.decode(c.encode('')), '')
+  }
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'HAS FAILURE'}  pass=${pass} fail=${fail}`)
   if (failures.length) console.log('失败项：\n  - ' + failures.join('\n  - '))
   console.log(`临时 userData: ${TMP}`)

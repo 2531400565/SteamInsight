@@ -41,6 +41,15 @@ const HUNT_META_KEY = 'hunt_notified_on'
 interface SyncData {
   user: SteamUser; games: OwnedGame[]; sessions: PlaySession[]; achievements: Achievement[]
   wishlist: WishlistItem[]; discounts: DiscountItem[]; priceHistory: PricePoint[]
+  /**
+   * 本轮**促销数据源是否可信**（false = featuredcategories 与搜索 specials 都没拿到东西）。
+   *
+   * 这个标记存在的唯一理由：`purgeDiscounts` 会删掉「本轮结果里没有」的行，可它分不清
+   * 「这个折扣真的结束了」和「这一轮根本没查到」。实测踩过：09:33 写入 40 条，09:55 那一轮
+   * 搜索源没返回 → 31 条被当成已下架删光，界面上「在售折扣」从 40 款掉回 9 款。
+   * 所以数据源不可用时必须**跳过折扣清理**、沿用上次结果，并如实告诉用户本轮没查到。
+   */
+  discountsTrusted: boolean
 }
 
 let lastStatus: SyncStatusPayload = { phase: 'idle', running: false, message: '', progress: 0, lastSyncAt: null, lastSyncOk: null, lastError: null, source: 'demo' }
@@ -69,7 +78,8 @@ function buildDemoData(): SyncData {
   const wishlist = buildDemoWishlist()
   const discounts = buildDemoDiscounts()
   const priceHistory = buildDemoPriceHistory(games.map((g) => g.appId))
-  return { user, games, sessions, achievements, wishlist, discounts, priceHistory }
+  // 演示数据集是本地内置的，不存在「数据源没查到」这回事
+  return { user, games, sessions, achievements, wishlist, discounts, priceHistory, discountsTrusted: true }
 }
 
 // ---------- API 模式：真实拉取 ----------
@@ -238,6 +248,13 @@ async function buildApiData(settings: ReturnType<typeof getSettings>, force: boo
   }
   logInfo('sync', '折扣池', { featured: featured.specials.length, searchParsed: searchSpecials.length, addedFromSearch, total: discounts.length })
 
+  // 两个源都空 = 本轮什么都没查到（网络问题 / 接口改版 / 被限流）。此时 discounts 也是空的，
+  // 若照常清理就会把上一次的条目全删光 —— 用这个标记把「没查到」和「已下架」区分开。
+  const discountsTrusted = featured.specials.length > 0 || searchSpecials.length > 0
+  if (!discountsTrusted) {
+    logWarn('sync', '本轮未取到任何促销数据，折扣列表将沿用上次结果', { featured: 0, searchParsed: 0 })
+  }
+
   // 价格采样 + 史低判定：游戏库、愿望单、折扣条目统一采样。
   // 早前只采样游戏库，折扣商品从不进 price_history →「史低专区」永远算不出来。
   const samples: Array<{ appId: number; priceCents: number; originalPriceCents: number }> = []
@@ -274,7 +291,7 @@ async function buildApiData(settings: ReturnType<typeof getSettings>, force: boo
     const best = bestByApp.get(w.appId)
     if (best !== undefined) { w.historicalLowCents = best; if (w.isHistoricalLow) w.historicalLowAt = now }
   }
-  return { user, games, sessions, achievements, wishlist, discounts, priceHistory }
+  return { user, games, sessions, achievements, wishlist, discounts, priceHistory, discountsTrusted }
 }
 function mkDiscount(s: NonNullable<Awaited<ReturnType<typeof storeAppDetails>>>, category: DiscountItem['category'], now: number): DiscountItem {
   const orig = s.originalPriceCents, fin = s.priceCents, disc = orig > 0 && fin >= 0 ? Math.round((1 - fin / orig) * 100) : 0
@@ -296,10 +313,43 @@ function mkDiscount(s: NonNullable<Awaited<ReturnType<typeof storeAppDetails>>>,
  * 用 `d.games` 的完整 app_id 列表（而不是「本次新写入的 id」）：增量同步会跳过未变化的游戏，
  * 它们的行必须留下。全部列表为空时 `purgeStale()` 内部会直接返回 0，不会误清库。
  */
+/**
+ * 折扣清理决策（纯函数，便于探针直接验证这条不变量）。
+ *
+ * 规则只有一条：**「本轮没查到」不等于「折扣已下架」**。
+ * 数据源不可用时返回 purge=false，沿用上次结果 —— 宁可短暂多留几条已结束的条目，
+ * 也不能把用户的列表凭空删掉一半（实测踩过：40 款掉回 9 款，且无法自愈）。
+ */
+export function planDiscountPurge(
+  discountsTrusted: boolean,
+  currentCount: number
+): { purge: boolean; reason: string } {
+  if (!discountsTrusted) {
+    return { purge: false, reason: '本轮未取到促销数据，沿用上次结果（不把「没查到」当成「已下架」）' }
+  }
+  if (currentCount === 0) {
+    return { purge: false, reason: '本轮促销列表为空，清空全部没有意义' }
+  }
+  return { purge: true, reason: '本轮取到了促销数据，按本轮结果清理' }
+}
+
+/**
+ * 清理本次结果里已经不存在的数据。
+ *
+ * `discounts` 的清理走 `planDiscountPurge` 决策（见其注释）：数据源不可用时跳过，
+ * 沿用上次结果。其它三类表没有这个问题 —— games / achievements / wishlist 都来自
+ * 必然成功的账号接口，请求失败会直接抛错终止同步，根本走不到清理这步。
+ */
 function purgeStale(d: SyncData): number {
   const ownedIds = d.games.map((g) => g.appId)
-  return repo.purgeGames(ownedIds) + repo.purgeAchievements(ownedIds)
-    + repo.purgeWishlist(d.wishlist.map((w) => w.appId)) + repo.purgeDiscounts(d.discounts.map((x) => x.appId))
+  const base = repo.purgeGames(ownedIds) + repo.purgeAchievements(ownedIds)
+    + repo.purgeWishlist(d.wishlist.map((w) => w.appId))
+  const plan = planDiscountPurge(d.discountsTrusted, d.discounts.length)
+  if (!plan.purge) {
+    logInfo('sync', '跳过折扣清理', { reason: plan.reason, kept: d.discounts.length })
+    return base
+  }
+  return base + repo.purgeDiscounts(d.discounts.map((x) => x.appId))
 }
 
 function persist(d: SyncData, full: boolean): Record<string, number> {
@@ -447,7 +497,12 @@ export async function run(options?: SyncRunOptions): Promise<{ ok: boolean; erro
     fireNotifications(settings)
     const t = Date.now()
     logInfo('sync', '同步完成', { source, elapsedMs: t - startedAt, counts: JSON.stringify(counts) })
-    update({ phase: 'done', running: false, message: '同步完成', progress: 100, lastSyncAt: t, lastSyncOk: true })
+    // 「同步成功」不等于「每个数据源都取到了」。促销源本轮不可用时要如实说出来 ——
+    // 否则用户看到的是「同步完成」但列表悄悄少了一半，完全无从判断发生了什么。
+    const doneMessage = data.discountsTrusted
+      ? '同步完成'
+      : '同步完成（但本轮未取到促销数据，折扣列表沿用上次结果）'
+    update({ phase: 'done', running: false, message: doneMessage, progress: 100, lastSyncAt: t, lastSyncOk: true })
     return { ok: true, counts }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

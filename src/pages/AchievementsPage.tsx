@@ -1,5 +1,6 @@
+import { useAchievementBackfill, useAchievements } from '@/hooks/useAchievements'
 import { useMemo } from 'react'
-import { Award, BadgeCheck, Crown, Search, Star, Target, Trophy } from 'lucide-react'
+import { Award, BadgeCheck, Crown, Download, LoaderCircle, Search, Star, Target, Trophy } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, GameCover, ProgressBar, SectionHeader, StatCard } from '@/components/ui'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { AchievementTile } from '@/components/shared/AchievementTile'
@@ -22,8 +23,8 @@ export default function AchievementsPage() {
   const [showLocked, setShowLocked] = usePersistedState('achievements.showLocked', true)
 
   const games = snapshot?.games ?? []
-  // 成就读 derived 展开后的那一份（快照里是紧凑形态：图标只带文件名）
-  const achievements = derived?.achievements ?? []
+  // 成就明细改为按需加载（快照不再带全量明细：实测 4536 行 ≈ 975 KB）
+  const { achievements } = useAchievements()
 
   const summary = derived?.achievement
   const almost = useMemo(() => almostDone(games, achievements, ALMOST_LIMIT), [games, achievements])
@@ -56,7 +57,10 @@ export default function AchievementsPage() {
         title="成就中心"
         subtitle={`覆盖 ${summary.trackedGames} 款有成就系统的游戏。完成率与稀有度统计全部由本地 SQLite 聚合，不额外请求成就接口。`}
         action={
-          <div className="relative">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* 补全入口：同步是增量的，新买/久玩的游戏一直没有成就记录 */}
+            <BackfillButton />
+            <div className="relative">
             <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-t3" />
             <input
               value={query}
@@ -64,6 +68,7 @@ export default function AchievementsPage() {
               placeholder="搜索游戏或成就名…"
               className="w-[228px] rounded-pill border border-line bg-bg2/70 py-2 pl-9 pr-3 text-[13px] text-t1 outline-none transition-colors placeholder:text-t3 focus:border-line3"
             />
+            </div>
           </div>
         }
       />
@@ -258,6 +263,47 @@ export default function AchievementsPage() {
           </Card>
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * 「补全成就数据」按钮 + 进度条。
+ *
+ * 单独成组件而不是写在页面里：它有独立的生命周期（订阅主进程进度事件），
+ * 混在页面主体里会让已经很长的页面文件更难读。
+ */
+function BackfillButton(): React.JSX.Element {
+  const { progress, running, start, missingCount } = useAchievementBackfill()
+  const source = useDataStore((s) => s.snapshot?.user?.source)
+  if (source !== 'api') return <></>
+
+  const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0
+  return (
+    <div className="flex items-center gap-2">
+      {running ? (
+        <div className="flex items-center gap-2 rounded-pill border border-line bg-bg2/70 px-3 py-1.5 text-[11.5px] text-t2">
+          <LoaderCircle size={13} className="spin text-accent" />
+          <span>补全中 {progress ? `${progress.done}/${progress.total}` : ''}</span>
+          {progress?.currentName ? <span className="max-w-[120px] truncate text-t3">{progress.currentName}</span> : null}
+          {progress?.total ? (
+            <span className="h-1 w-16 overflow-hidden rounded-pill bg-bg4">
+              <span className="block h-full bg-accent transition-all" style={{ width: `${pct}%` }} />
+            </span>
+          ) : null}
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => void start()}
+          disabled={missingCount === 0}
+          title={missingCount === 0 ? '所有游戏的成就数据都已抓取过' : `有 ${missingCount} 款游戏还没有成就记录（同步只抓本次玩过的游戏）`}
+          className="flex items-center gap-1.5 rounded-pill border border-line2 px-3 py-1.5 text-[12px] text-t2 transition-colors hover:border-line3 hover:text-t1 disabled:opacity-45"
+        >
+          <Download size={13} />
+          {missingCount === 0 ? '成就数据已齐' : `补全成就数据（${missingCount} 款待补）`}
+        </button>
+      )}
     </div>
   )
 }

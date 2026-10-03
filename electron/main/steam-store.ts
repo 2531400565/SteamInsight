@@ -7,7 +7,8 @@
  *  2) 好评率不在 appdetails 里，只能走 appreviews。
  */
 import { asBool, asNum, asStr, isObj, requestJson } from './api-base'
-import { logInfo } from './logger'
+import { logInfo, logWarn } from './logger'
+import * as repo from './repository'
 
 const STORE_BASE = 'https://store.steampowered.com/api'
 /** 评测与搜索接口在 store 域下、不带 /api 前缀。 */
@@ -102,7 +103,16 @@ export function storeFeaturedCategories(cc = 'cn', l = 'schinese'): Promise<Feat
       ? specials.map((s) => { const o = isObj(s) ? s : {}; return { appId: asNum(o.id), name: asStr(o.name), endsAt: asNum(o.discount_expiration) || null } }).filter((x) => x.appId > 0)
       : []
   })
-  return Promise.all([featured, storeSearchFreeAppIds(cc, l)]).then(([specials, freeAppIds]) => ({ specials, freeAppIds }))
+  return Promise.all([featured, storeSearchFreeAppIds(cc, l)]).then(([specials, freeAppIds]) => {
+    // specials 恒定 10 条是 Steam 的设计，但**如果有一天变了**（变成 3 条或 40 条），
+    // 用户看到的折扣数量就会无声变化 —— 记一条指纹，变了就报警。
+    recordApiHealth({
+      key: 'store.featuredcategories', label: '商店 · 今日精选',
+      shape: `specials:${Array.isArray(specials) ? 'arr' : typeof specials}`,
+      ok: specials.length > 0, size: specials.length
+    })
+    return { specials, freeAppIds }
+  })
 }
 
 /**
@@ -209,10 +219,125 @@ export function parseSearchSpecials(html: string, limit: number): SearchSpecialI
  * 代价是拿不到 tags 与评测数量，因此这些条目不参与「高评分折扣」的评分筛选。
  * 解析失败一律返回空数组，退回 featuredcategories 的 10 条，行为与改动前一致。
  */
-export async function storeSearchSpecials(cc = 'cn', l = 'schinese', limit = 40): Promise<SearchSpecialItem[]> {
+export async function storeSearchSpecials(cc = 'cn', l = 'schinese', limit = 80): Promise<SearchSpecialItem[]> {
+  // count 上限 100 是官方允许的峰值；实测 specials 在国区能回 59–60 条，
+  // 所以 limit=80 已经能取到「这个数据源能给的全部」，再往上加也只是白设一个更大的数。
   const url = `${STORE_ROOT}/search/results/?query&start=0&count=${Math.min(100, limit + 10)}&specials=1&cc=${cc}&l=${l}&json=1&infinite=1`
   const html = await requestJson(url, 15000, 1).then((j) => (isObj(j) ? asStr((j as Record<string, unknown>).results_html) : '')).catch(() => '')
   const items = parseSearchSpecials(html, limit)
   logInfo('store', '搜索促销解析完成', { htmlBytes: html.length, parsed: items.length, limit })
+  // 结构指纹：results_html 从有变成空、或解析条数骤降，都要能被发现
+  recordApiHealth({
+    key: 'store.search.specials', label: '商店搜索 · 促销列表',
+    shape: html ? `html:${/class="discount_pct/.test(html) ? 'rows' : 'norows'}:${/<span class="title">/.test(html) ? 'title' : 'notitle'}` : 'empty',
+    ok: items.length > 0, size: items.length
+  })
   return items
+}
+
+/**
+ * 按关键词搜索商店条目（含当前价格与折扣率）。
+ *
+ * 折扣池是「按折扣力度排的 40 条」，用户想找的往往是**自己那款**在不在打折，
+ * 翻列表很慢。搜索接口的 `query` 参数正好干这件事：1 个请求拿到名称 + 中文名 + 现价 + 折扣。
+ * 命中结果里 `appId` 会与本地库/愿望单比对，界面据此显示「已拥有 / 已在愿望单」。
+ */
+export async function storeSearchByKeyword(
+  keyword: string, cc = 'cn', l = 'schinese', limit = 12
+): Promise<Array<{ appId: number; name: string; finalPriceCents: number; originalPriceCents: number; discountPercent: number }>> {
+  const q = keyword.trim()
+  if (!q) return []
+  const url = `${STORE_ROOT}/search/results/?query&term=${encodeURIComponent(q)}&start=0&count=${Math.min(50, limit * 2)}&cc=${cc}&l=${l}&json=1&infinite=1`
+  const html = await requestJson(url, 12000, 1).then((j) => (isObj(j) ? asStr((j as Record<string, unknown>).results_html) : '')).catch(() => '')
+  const out: Array<{ appId: number; name: string; finalPriceCents: number; originalPriceCents: number; discountPercent: number }> = []
+  const seen = new Set<number>()
+  for (const raw of html.split('<a ')) {
+    if (out.length >= limit) break
+    if (!raw.includes('data-ds-appid=')) continue
+    const appId = Number(/data-ds-appid="(\d+)"/.exec(raw)?.[1])
+    if (!Number.isFinite(appId) || appId <= 0 || seen.has(appId)) continue
+    const finalCents = Number(/data-price-final="(\d+)"/.exec(raw)?.[1])
+    if (!Number.isFinite(finalCents)) continue
+    let originalCents = parsePriceTextToCents(/class="discount_original_price"[^>]*>([^<]+)</.exec(raw)?.[1] ?? '')
+    const pct = Math.abs(Number(/class="discount_pct[^"]*"[^>]*>-?(\d+)%/.exec(raw)?.[1] ?? NaN))
+    if (originalCents <= finalCents && pct > 0 && pct < 100) originalCents = Math.round(finalCents / (1 - pct / 100))
+    seen.add(appId)
+    out.push({
+      appId,
+      name: /<span class="title">([^<]+)<\/span>/.exec(raw)?.[1]?.trim() || `App ${appId}`,
+      finalPriceCents: finalCents,
+      // 无折扣时原价=现价（界面显示为「无折扣」）
+      originalPriceCents: originalCents > finalCents ? originalCents : finalCents,
+      discountPercent: originalCents > finalCents && pct > 0 ? pct : 0
+    })
+  }
+  logInfo('store', '商店搜索完成', { keyword: q, parsed: out.length })
+  return out
+}
+
+/**
+ * 接口健康记录（V5）。
+ *
+ * 动机全是真实的翻车记录：
+ *  - `featuredcategories` 的 specials 恒定只有 10 条（国区/国际区都一样）——
+ *    早前以为「在售折扣只有 9 款」是采集失败，其实是源头上限；
+ *  - 商店搜索接口改过一次返回形态：`json=1` 不带 `infinite=1` 返回 `{desc, items:[{name,logo}]}`，
+ *    带 `infinite=1` 返回 `{results_html}` —— 两种都 200，都"成功"，但字段完全不同；
+ *  - `appdetails` 的顶层键不一定等于请求的 appid。
+ *
+ * 这些都属于「**HTTP 200 但结构变了**」，传统的成功/失败统计完全看不见。
+ * 所以这里记录的是**结构指纹**（关键字段名 + 关键数组的条数），一旦和上次不同就记一条警告。
+ */
+export interface ApiHealthEntry {
+  key: string
+  label: string
+  /** 结构指纹（字段名与条数拼成短串） */
+  shape: string
+  /** 本次是否成功拿到可用数据 */
+  ok: boolean
+  /** 观察到的规模（如 specials 条数、results_html 字节数） */
+  size: number
+  at: number
+  note?: string
+}
+
+const HEALTH_META_KEY = 'api_health'
+
+/** 结构指纹：只取「判断可用性必需的字段」，字段名变了才算结构变了。 */
+export function shapeSignature(value: unknown, pick: string[]): string {
+  if (!isObj(value)) return typeof value
+  const keys = Object.keys(value as Record<string, unknown>)
+  return `${keys.slice(0, 8).join(',')}|${pick.map((p) => `${p}:${isObj((value as Record<string, unknown>)[p]) ? 'obj' : typeof (value as Record<string, unknown>)[p]}`).join(';')}`
+}
+
+/** 记一条接口健康观察，并和上一次的指纹比较。 */
+export function recordApiHealth(entry: Omit<ApiHealthEntry, 'at'>): { changed: boolean; previous: ApiHealthEntry | null } {
+  let previous: ApiHealthEntry | null = null
+  const entries: ApiHealthEntry[] = loadApiHealth()
+  const found = entries.find((e) => e.key === entry.key)
+  if (found) {
+    previous = { ...found }
+    Object.assign(found, entry, { at: Date.now() })
+  } else {
+    entries.push({ ...entry, at: Date.now() })
+  }
+  // 只留最近 20 条观察
+  const trimmed = entries.slice(-20)
+  repo.setMeta(HEALTH_META_KEY, JSON.stringify(trimmed))
+  const changed = previous !== null && previous.shape !== entry.shape
+  if (changed) {
+    logWarn('net', '接口结构疑似变化', { key: entry.key, before: previous?.shape, after: entry.shape })
+  }
+  return { changed, previous }
+}
+
+export function loadApiHealth(): ApiHealthEntry[] {
+  try {
+    const raw = repo.getMeta(HEALTH_META_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as ApiHealthEntry[]) : []
+  } catch {
+    return []
+  }
 }

@@ -371,3 +371,120 @@ export interface AccountSwitchInfo {
   /** 当前设置里的账号 */
   currentSteamId: string
 }
+
+/**
+ * hosts 劫持现状（只读诊断结果）。
+ * 加速器（Watt / Steam++）会把 Steam 域名劫持到 127.0.0.1；它一关，这些条目还在，
+ * 于是不开加速器就连不上 Steam —— 这是「同步失败但软件没坏」最常见的原因。
+ */
+export interface HostsStatus {
+  path: string
+  /** 生效中的 Steam 劫持行（还原时会被注释掉的就是这些） */
+  hijacked: string[]
+  /** 生效中的其它行（GitHub / Docker Hub / HF……一律不碰，列出来只为让用户看清） */
+  kept: string[]
+  /** 已被注释的 Steam 行（之前还原过） */
+  disabled: string[]
+  /** 本机 80/443 有人应答 = 加速器正在接管 */
+  localProxyListening: boolean
+  checkedAt: number
+}
+
+/** 还原计划：只算不写，让界面先把「会改哪几行、保留哪几行」摊开给用户看。 */
+export interface HostsPlanView {
+  disable: string[]
+  kept: string[]
+  changed: boolean
+}
+
+export interface HostsApplyResult {
+  ok: boolean
+  disabledCount: number
+  backupFile: string | null
+  error: string | null
+  /** 是否用「重新读 hosts」复核过，而不是只信执行结果 */
+  verified: boolean
+}
+
+export interface HostsBackupInfo {
+  file: string
+  createdAt: number
+  bytes: number
+}
+
+export interface ProxyTestResult {
+  ok: boolean
+  via: string | null
+  ms: number
+  error: string | null
+}
+
+/** 成就明细按需查询参数（V5：明细不再随快照全量下发）。 */
+export interface AchievementQueryRequest {
+  appId?: number
+  onlyUnlocked?: boolean
+  rareOnly?: boolean
+  /** 0 = 不限制（一次全量）；>0 时按 app_id, api_name 排序分页 */
+  limit?: number
+  offset?: number
+}
+
+export interface AchievementQueryResult {
+  rows: import('@/types/steam').SnapshotAchievement[]
+  total: number
+}
+
+/** 成就补全进度（逐款拉取，进度条用）。 */
+export interface AchievementBackfillProgress {
+  running: boolean
+  total: number
+  done: number
+  failed: number
+  added: number
+  currentAppId: number | null
+  currentName: string
+  finishedAt: number | null
+}
+
+export interface AchievementBackfillResult {
+  ok: boolean
+  attempted: number
+  added: number
+  failed: number
+  error: string | null
+}
+
+/** 商店关键词搜索结果（折扣页搜索框用）。 */
+export interface StoreSearchHit {
+  appId: number
+  name: string
+  finalPriceCents: number
+  originalPriceCents: number
+  discountPercent: number
+}
+
+/** 价格历史按需查询（与成就同理：整表走 IPC 是浪费）。 */
+export interface PriceHistoryRequest {
+  appIds?: number[]
+  sinceDays?: number
+  /** 每天只留最后一笔（生涯页画曲线用，行数小一个量级） */
+  daily?: boolean
+  limit?: number
+}
+
+/** 接口健康记录（结构指纹变化 = Steam 改接口了）。 */
+export interface ApiHealthEntry {
+  key: string
+  label: string
+  shape: string
+  ok: boolean
+  size: number
+  at: number
+  note?: string
+}
+
+/** API Key 的落盘安全状态（供设置页如实展示，不做「假装安全」）。 */
+export interface SecretStatus {
+  /** true = 用了系统级加密（Windows DPAPI）；false = 本机不支持，当前明文保存 */
+  encrypted: boolean
+}

@@ -368,6 +368,16 @@ export interface AppSettings {
   countryCode: string
   enableDemoData: boolean
   /**
+   * 应用级自定义代理，形如 `127.0.0.1:7890`（也可写 `http://127.0.0.1:7890`）。
+   * 空字符串 = 跟随系统代理设置。
+   *
+   * 作用域**只有本应用**：`session.defaultSession.setProxy` 只改自己的 Chromium 会话，
+   * 不写系统代理、不动注册表，所以绝不会影响同一台机器上的 Nacos / Docker / 其它软件。
+   * 存在的意义：系统手动代理经常指向一个已经没人监听的端口（例如加速器没开时的 7897），
+   * 这时填一个真实在听的端口就能立刻恢复。
+   */
+  customProxy: string
+  /**
    * 检测到「换账号」时怎么处理上一个账号留下的数据。
    *  - `'clear'`：删掉旧账号的会话与快照（默认，见 user-data.purgePreviousAccount）。
    *  - `'keep'`：本次不清理、旧数据保留在库里并继续显示（适合想先把旧数据导出再处理的情况）。
@@ -396,6 +406,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   avatarUrl: '',
   countryCode: 'CN',
   enableDemoData: true,
+  customProxy: '',
   accountSwitchPolicy: 'clear',
   autoBackup: true,
   autoBackupKeep: 7

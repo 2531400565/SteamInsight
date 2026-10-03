@@ -8,10 +8,10 @@
 import { app, BrowserWindow, Notification, Tray, Menu, type MenuItemConstructorOptions } from 'electron'
 import { CH } from '@shared/channels'
 import type { NotifyPayload } from '@shared/contract'
-import { getSettings } from './settings'
-import { run as runSync, getSyncStatus } from './sync'
+import { getSettings, setSettings } from './settings'
+import { run as runSync, getSyncStatus, isRunning } from './sync'
 import { resolveTrayIcon } from './tray-icon'
-import { logWarn } from './logger'
+import { logInfo, logWarn } from './logger'
 
 let mainWin: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -77,13 +77,30 @@ function syncStateText(): string {
 
 /** 重建托盘菜单。展示项（enabled:false）随状态刷新，所以每分钟重建一次。 */
 function buildTrayMenu(): Menu {
+  const settings = getSettings()
+  const syncing = isRunning()
   const template: MenuItemConstructorOptions[] = [
     { label: '显示主窗口', click: () => showWindow() },
     { type: 'separator' },
     { label: `上次同步：${syncStateText()}`, enabled: false },
-    { label: `下次同步：${nextSyncText()}`, enabled: false },
+    { label: `下次同步：${settings.autoSync ? nextSyncText() : '已暂停'}`, enabled: false },
     { type: 'separator' },
-    { label: '立即同步（强制刷新）', click: () => { void runSync({ force: true }) } },
+    {
+      label: syncing ? '正在同步…' : '立即同步（强制刷新）',
+      enabled: !syncing,
+      click: () => { void runSync({ force: true }) }
+    },
+    // 自动同步开关：以前只能在设置页里改，想临时停掉定时同步（比如正在玩游戏、怕它抢网络）
+    // 必须先打开主窗口 —— 托盘右键是最顺手的地方，放在这里。
+    {
+      label: settings.autoSync ? '暂停自动同步' : '恢复自动同步',
+      click: () => {
+        const next = !getSettings().autoSync
+        setSettings({ ...getSettings(), autoSync: next })
+        logInfo('tray', next ? '已恢复自动同步' : '已暂停自动同步', { intervalMin: getSettings().syncIntervalMin })
+        refreshTray()
+      }
+    },
     { label: '打开愿望单', click: () => showWindow('wishlist') },
     { type: 'separator' },
     { label: '退出', click: () => app.quit() }

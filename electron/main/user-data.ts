@@ -20,8 +20,18 @@ import { PRUNE_SQL } from '@/database/queries'
 /** 采样保留天数：这段时间内一行不删，`isHistoricalLow` 的判定因此始终精确。 */
 export const SAMPLE_KEEP_DAYS = 90
 
-/** snapshots 每款游戏保留的最近条数（只需够做一次差分）。 */
-export const SNAPSHOT_KEEP_ROWS = 2
+/**
+ * snapshots 每款游戏保留的最近条数。
+ *
+ * 原来是 2，理由是「它只被 lastSnapshot() 用来做一次差分」—— 但这等于**主动扔掉了自己的历史**：
+ * 实测 69 款游戏只有 138 行快照（正好 2 行/款），于是 play_sessions 只有 15 段，
+ * 「累计时长曲线 / 连续游玩天数 / 年度对比」这类分析没有数据基础。
+ * 而这恰恰是本软件唯一没法被手机端替代的地方（需要长期本地累积）。
+ *
+ * 30 条的代价：69 款 × 30 = 2070 行，SQLite 里几乎不占空间（比一条成就小得多）。
+ * 2 条只能回答「现在玩了多久」，30 条能回答「这一年在玩什么」。
+ */
+export const SNAPSHOT_KEEP_ROWS = 30
 
 /**
  * 给两张采样表瘦身。**降采样，不是简单删除**。
@@ -32,7 +42,7 @@ export const SNAPSHOT_KEEP_ROWS = 2
  * 规则：
  *  - `price_history`：90 天内全留；更早的每天只留最后一笔（收盘价）+ **该游戏历史最低那一笔**
  *    （保证 `priceLowest()` 返回的仍然是真值，史低判定不会因为清理而失真）；
- *  - `snapshots`：每款游戏只留最近 2 条 —— 它只被 `lastSnapshot()` 用来做差分，更早的从没被读过。
+ *  - `snapshots`：每款游戏保留最近 30 条（见 SNAPSHOT_KEEP_ROWS 的注释：差分 + 趋势都要用）。
  *
  * 幂等，可以在每次同步收尾调用；也用于给老库做一次性瘦身。
  */

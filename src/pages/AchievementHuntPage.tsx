@@ -1,3 +1,4 @@
+import { useAchievements } from '@/hooks/useAchievements'
 import { useMemo, useState } from 'react'
 import { BadgeCheck, Crosshair, Info, Sparkles, Star, Target, Trophy } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, GameCover, ProgressBar, SectionHeader, Select, StatCard, Tooltip } from '@/components/ui'
@@ -46,7 +47,7 @@ export default function AchievementHuntPage() {
   const [picksOnly, setPicksOnly] = usePersistedState('hunt.picksOnly', false)
 
   const games = snapshot?.games ?? []
-  const achievements = derived?.achievements ?? []
+  const { achievements } = useAchievements()
   const pickIndex = derived?.pickIndex ?? new Set<string>()
 
   const groups = useMemo<HuntGroup[]>(() => {

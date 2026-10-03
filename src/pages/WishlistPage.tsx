@@ -2,6 +2,9 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { Bell, BellRing, Check, Heart, Percent, Tag, Target, TrendingDown, X } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, SectionHeader, Select, Switch, Tooltip } from '@/components/ui'
 import { PageHeader } from '@/components/shared/PageHeader'
+import type { PricePoint } from '@/types/steam'
+import { pricePercentileRank } from '@/utils/analytics'
+import { usePriceHistory } from '@/hooks/useAchievements'
 import { DiscountCard } from '@/components/shared/DiscountCard'
 import { useAppStore } from '@/store/useAppStore'
 import { useDataStore } from '@/store/useDataStore'
@@ -40,6 +43,11 @@ export default function WishlistPage() {
   const settings = useAppStore((s) => s.settings)
   const patchSettings = useAppStore((s) => s.patchSettings)
   const runSync = useAppStore((s) => s.runSync)
+
+  // 价格历史按需拉取：愿望单最该有的信息是「现在这个价处在什么位置」，
+  // 而 priceTrend / pricePercentileRank 之前只在游戏详情页用过。
+  const wishAppIds = useMemo(() => (snapshot?.wishlist ?? []).map((w) => w.appId), [snapshot])
+  const { byApp: priceByApp } = usePriceHistory(wishAppIds, { daily: true, sinceDays: 90 })
 
   // O-5：排序、标签筛选与两个过滤开关跨会话记住（这是本项目里最容易反复重设的一组控件）
   const [sort, setSort] = usePersistedState<SortKey>('wishlist.sort', 'discount')
@@ -206,6 +214,7 @@ export default function WishlistPage() {
                 }
                 footer={
                   <div className="space-y-2">
+                    <PricePositionHint appId={item.appId} points={priceByApp.get(item.appId) ?? []} currentCents={item.finalPriceCents} />
                     <div className="flex items-center justify-between gap-2">
                       <span className="truncate text-[11px] text-t3">
                         {formatRelative(item.addedAt, '未知')}加入 · {formatPercent(item.reviewPercent, 0)} 好评
@@ -418,5 +427,25 @@ function PriceAlertControl({
         </button>
       ) : null}
     </div>
+  )
+}
+
+
+/**
+ * 「现在这个价在什么位置」。
+ *
+ * 用的是**本机 90 天的价格采样**算出的百分位（与「史低」同一口径），不是第三方数据。
+ * 愿望单里最常见的纠结是「现在这个价算不算低」—— 有了百分位就不用凭感觉判断。
+ * 采样不足 2 个点时什么都不显示：宁可不给结论，也不给一个基于一条数据的结论。
+ */
+function PricePositionHint({ appId: _appId, points, currentCents }: { appId: number; points: PricePoint[]; currentCents: number }): React.JSX.Element | null {
+  const rank = useMemo(() => pricePercentileRank(points, currentCents), [points, currentCents])
+  if (rank === null) return null
+  const tone = rank <= 20 ? 'text-ok' : rank <= 50 ? 'text-t2' : 'text-t3'
+  const label = rank <= 10 ? '接近 90 天最低价' : rank <= 30 ? '低于近期常见价' : rank <= 70 ? '处于常见区间' : '高于近期常见价'
+  return (
+    <p className={`text-[11px] ${tone}`} title={`基于本机最近 ${points.length} 次价格采样计算的百分位`}>
+      {label}（价位百分位 {rank}）
+    </p>
   )
 }

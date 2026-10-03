@@ -2,10 +2,16 @@
  * 渲染进程看到的 IPC 接口契约 + 全局 window 类型增强。
  * preload 暴露的 `window.steamInsight` 必须严格实现 SteamInsightApi。
  */
-import type { AppSessionRow, AccountSwitchInfo, AppInfo, AuthStartResult, BackupRunResult, BackupStatus, CoverCacheStats, DatabaseHealth, DataPackResult, DbQueryName, DiagnoseCheck, DiagnoseConfig, DiagnoseLevel, ExportResult, GameNote, GameNotePatch, HuntPick, HuntPickPatch, ManualSessionPatch, ManualSessionResult, NavigateRequest, NetworkDiagnosis, NotifyPayload, PriceAlert, ReportPeriod, SteamDetection, SyncStatusPayload, TableExportRequest, WrappedExportRequest } from '../../electron/shared/contract'
+import type { ApiHealthEntry, AppSessionRow, AccountSwitchInfo, AppInfo, AuthStartResult, BackupRunResult, BackupStatus, CoverCacheStats, DatabaseHealth, DataPackResult, DbQueryName, DiagnoseCheck, DiagnoseConfig, DiagnoseLevel, ExportResult, GameNote, AchievementBackfillProgress, AchievementBackfillResult, AchievementQueryRequest, AchievementQueryResult, GameNotePatch, HostsApplyResult, HostsBackupInfo, HostsPlanView, HostsStatus, HuntPick, HuntPickPatch, ManualSessionPatch, ManualSessionResult, NavigateRequest, NetworkDiagnosis, NotifyPayload, PriceAlert, PriceHistoryRequest, ProxyTestResult, ReportPeriod,
+  SecretStatus, SteamDetection, StoreSearchHit, SyncStatusPayload, TableExportRequest, WrappedExportRequest } from '../../electron/shared/contract'
 import type { AppSettings, DataSource, DiscountItem, OwnedGame, PlaySession, PricePoint, SnapshotAchievement, SteamUser, WishlistItem } from './steam'
 
 export type {
+  AchievementBackfillProgress,
+  ApiHealthEntry,
+  AchievementBackfillResult,
+  AchievementQueryRequest,
+  AchievementQueryResult,
   AppSessionRow,
   AccountSwitchInfo,
   AppInfo,
@@ -24,13 +30,21 @@ export type {
   GameNotePatch,
   HuntPick,
   HuntPickPatch,
+  HostsApplyResult,
+  HostsBackupInfo,
+  HostsPlanView,
+  HostsStatus,
   ManualSessionPatch,
   ManualSessionResult,
   NavigateRequest,
   NetworkDiagnosis,
   NotifyPayload,
   PriceAlert,
+  ProxyTestResult,
   ReportPeriod,
+  SecretStatus,
+  PriceHistoryRequest,
+  StoreSearchHit,
   SnapshotAchievement,
   SteamDetection,
   SyncStatusPayload,
@@ -79,6 +93,7 @@ export interface SyncRunOptions {
 
 export interface SteamInsightApi {
   app: {
+    secretStatus: () => Promise<SecretStatus>
     info: () => Promise<AppInfo>
     openExternal: (url: string) => Promise<boolean>
   }
@@ -131,9 +146,36 @@ export interface SteamInsightApi {
     wrapped: (request: WrappedExportRequest) => Promise<ExportResult>
     table: (request: TableExportRequest) => Promise<ExportResult>
   }
-  /** 连通性自检（逐个请求应用真实用到的 5 个域名并给出结论） */
+  /** 价格历史按需查询 */
+  price: {
+    history: (req: PriceHistoryRequest) => Promise<PricePoint[]>
+  }
+  /** 商店关键词搜索（折扣页搜索框） */
+  store: {
+    search: (keyword: string) => Promise<StoreSearchHit[]>
+  }
+  /** 成就明细按需查询 + 全量补全（明细不再随快照全量下发） */
+  ach: {
+    query: (req: AchievementQueryRequest) => Promise<AchievementQueryResult>
+    backfill: () => Promise<AchievementBackfillResult>
+    onBackfillProgress: (cb: (p: AchievementBackfillProgress) => void) => () => void
+  }
+  /** 连通性自检 + 接口健康记录 */
   net: {
     diagnose: () => Promise<NetworkDiagnosis>
+    apiHealth: () => Promise<ApiHealthEntry[]>
+    /** hosts 劫持状态（只读，不改系统） */
+    hostsStatus: () => Promise<HostsStatus>
+    /** 还原计划预览：只算不写 */
+    hostsPlan: () => Promise<HostsPlanView>
+    /** 执行还原（内部先备份，再弹 UAC 提权写入） */
+    hostsApply: () => Promise<HostsApplyResult>
+    hostsBackups: () => Promise<HostsBackupInfo[]>
+    /** 从指定备份整文件恢复 */
+    hostsRestore: (backupFile: string) => Promise<HostsApplyResult>
+    /** 应用自定义代理（只影响本应用会话） */
+    proxyApply: (proxyText: string) => Promise<{ applied: boolean; label: string; error: string | null }>
+    proxyTest: () => Promise<ProxyTestResult>
   }
   /** 诊断与数据包 */
   diag: {

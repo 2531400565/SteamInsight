@@ -66,6 +66,27 @@ export { toCoverCacheUrl } from '../../src/components/ui/GameCover'
 // 优化 2：封面缓存的占用统计与清理（真实 fs，探针的 userData 指向临时目录）
 export { coverCacheStats, clearCoverCache } from '../../electron/main/cover-cache'
 
+// ---- 折扣清理决策（2026-10-03 回归修复）----
+export { planDiscountPurge } from '../../electron/main/sync'
+
+// ---- 安全：外链白名单 / steamid 脱敏 / 明文回退编解码 ----
+export { isSafeExternalUrl, SAFE_EXTERNAL_PROTOCOLS } from '../../electron/main/safe-url'
+export { redactSteamId } from '../../electron/main/diagnostics'
+export { plainCodec } from '../../electron/main/settings'
+
+// ---- 本轮：生涯聚合 / 价格按需 / 快照保留策略 ----
+export { buildCareer } from '../../src/utils/analytics'
+export { queryPriceHistory, savePriceHistory } from '../../electron/main/repository'
+
+// ---- 成就按需查询（真实临时库）与商店搜索解析 ----
+export { queryAchievements, setAchievementCounts, saveAchievements } from '../../electron/main/repository'
+export { storeSearchByKeyword } from '../../electron/main/steam-store'
+
+// ---- hosts 守卫（纯函数部分；执行写系统文件的路径不进探针）----
+export { planHostsRewrite, STEAM_HIJACK_DOMAINS, HOSTS_PATH } from '../../electron/main/hosts-guard'
+export { normalizeProxyText } from '../../electron/main/settings'
+export { hostsVerdict } from '../../src/hooks/useHostsGuard'
+
 // ---- 本轮修复（2026-10-03）----
 export { parseSearchSpecials, parsePriceTextToCents } from '../../electron/main/steam-store'
 export { coverCandidates } from '../../src/components/ui/GameCover'

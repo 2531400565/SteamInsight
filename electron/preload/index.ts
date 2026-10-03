@@ -6,11 +6,12 @@
  */
 import { contextBridge, ipcRenderer } from 'electron'
 import { CH } from '@shared/channels'
-import type { DbQueryName, NavigateRequest } from '@shared/contract'
+import type { AchievementBackfillProgress, AchievementQueryRequest, PriceHistoryRequest, DbQueryName, NavigateRequest } from '@shared/contract'
 import type { SteamInsightApi } from '../../src/types/ipc'
 
 const api: SteamInsightApi = {
   app: {
+    secretStatus: () => ipcRenderer.invoke(CH.secretStatus),
     info: () => ipcRenderer.invoke(CH.appInfo),
     openExternal: (url: string) => ipcRenderer.invoke(CH.openExternal, url)
   },
@@ -61,8 +62,31 @@ const api: SteamInsightApi = {
     wrapped: (request) => ipcRenderer.invoke(CH.exportWrapped, request),
     table: (request) => ipcRenderer.invoke(CH.exportTable, request)
   },
+  price: {
+    history: (req: PriceHistoryRequest) => ipcRenderer.invoke(CH.priceHistoryQuery, req)
+  },
+  store: {
+    search: (keyword: string) => ipcRenderer.invoke(CH.storeSearch, keyword)
+  },
+  ach: {
+    query: (req: AchievementQueryRequest) => ipcRenderer.invoke(CH.achQuery, req),
+    backfill: () => ipcRenderer.invoke(CH.achBackfill),
+    onBackfillProgress: (cb: (p: AchievementBackfillProgress) => void) => {
+      const listener = (_e: unknown, payload: AchievementBackfillProgress): void => cb(payload)
+      ipcRenderer.on(CH.achBackfillProgress, listener)
+      return () => ipcRenderer.removeListener(CH.achBackfillProgress, listener)
+    }
+  },
   net: {
-    diagnose: () => ipcRenderer.invoke(CH.netDiagnose)
+    diagnose: () => ipcRenderer.invoke(CH.netDiagnose),
+    apiHealth: () => ipcRenderer.invoke(CH.apiHealth),
+    hostsStatus: () => ipcRenderer.invoke(CH.hostsStatus),
+    hostsPlan: () => ipcRenderer.invoke(CH.hostsPlan),
+    hostsApply: () => ipcRenderer.invoke(CH.hostsApply),
+    hostsBackups: () => ipcRenderer.invoke(CH.hostsBackups),
+    hostsRestore: (file: string) => ipcRenderer.invoke(CH.hostsRestore, file),
+    proxyApply: (proxyText: string) => ipcRenderer.invoke(CH.proxyApply, proxyText),
+    proxyTest: () => ipcRenderer.invoke(CH.proxyTest)
   },
   diag: {
     exportPack: () => ipcRenderer.invoke(CH.diagExport)

@@ -54,6 +54,19 @@ export function saveGames(games: OwnedGame[]): void {
 export function saveAchievements(list: Achievement[]): void {
   transaction(() => list.forEach((a) => upsert('achievements', ['app_id', 'api_name'], achievementToRow(a))))
 }
+
+/**
+ * 只回写某款游戏的成就计数，不动其它字段。
+ *
+ * 「成就补全」需要在**不重写整行游戏数据**的前提下更新计数：直接 saveGames 的话，
+ * 会把这份局部更新的游戏对象写回库里，把库来源/时长/上次同步时间等字段一起覆盖成旧值
+ * （增量同步里 games 往往只带着部分字段）。所以这里走一次最小 UPDATE。
+ */
+export function setAchievementCounts(appId: number, total: number, unlocked: number, rare: number): void {
+  run('UPDATE games SET achievements_total = $total, achievements_unlocked = $unlocked, rare_achievements = $rare WHERE app_id = $appId', {
+    total, unlocked, rare, appId
+  })
+}
 export function saveWishlist(list: WishlistItem[]): void {
   transaction(() => list.forEach((w) => upsert('wishlist', ['app_id', 'steam_id'], wishlistToRow(w))))
 }
@@ -169,6 +182,95 @@ export const purgeWishlist = (keep: number[]): number => purgeStale('wishlist', 
  *  由 `user-data.pruneSamples()` 按时间降采样。 */
 export const purgeDiscounts = (keep: number[]): number => purgeStale('discounts', keep)
 
+/**
+ * 按需查询成就明细（V5：把 975 KB 的快照载荷改成「进页面才拉」）。
+ *
+ * 分页而不是一次全量返回：成就中心的三个榜单只需要各自的 TOP N，
+ * 追猎页只要「稀有且未解锁」那部分，而游戏详情页只要一款游戏的成就。
+ * 真需要全量时（limit=0）才会一次返回全部 —— 那是用户主动要看全部成就的场合。
+ */
+export interface AchievementQuery {
+  /** 只查某一款游戏（详情页） */
+  appId?: number
+  /** 只看已解锁 / 只看稀有未解锁（追猎页） */
+  onlyUnlocked?: boolean
+  rareOnly?: boolean
+  /** 0 = 不限制 */
+  limit?: number
+  offset?: number
+}
+
+export function queryAchievements(q: AchievementQuery): { rows: SnapshotAchievement[]; total: number } {
+  const where: string[] = []
+  const params: Record<string, unknown> = {}
+  if (typeof q.appId === 'number' && Number.isFinite(q.appId)) {
+    where.push('app_id = $appId')
+    params.appId = q.appId
+  }
+  if (q.onlyUnlocked) where.push('unlocked = 1')
+  if (q.rareOnly) where.push('is_rare = 1 AND unlocked = 0')
+  const clause = where.length ? ` WHERE ${where.join(' AND ')}` : ''
+  const total = num(get(`SELECT COUNT(*) AS c FROM achievements${clause}`, params)?.c)
+  const limit = Math.max(0, Math.min(5000, Math.floor(q.limit ?? 0)))
+  const offset = Math.max(0, Math.floor(q.offset ?? 0))
+  // limit=0 表示「全量」；排序固定为 游戏→api 名，保证分页结果不重不漏
+  const sql = limit > 0
+    ? `SELECT * FROM achievements${clause} ORDER BY app_id, api_name LIMIT ${limit} OFFSET ${offset}`
+    : `SELECT * FROM achievements${clause} ORDER BY app_id, api_name`
+  return { rows: all(sql, params).map(rowToAchievement).map(toSnapshotAchievement), total }
+}
+
+/**
+ * 按需查询价格历史（与成就明细同样的按需化：整表走 IPC 是纯浪费）。
+ *
+ * 三种用法：
+ *  - 详情页：只给一款游戏最近 N 天（`appIds: [id]`）
+ *  - 愿望单/折扣页：给一批 appid，取各自最近 N 天（`appIds: [...]`）
+ *  - 生涯页：给全部游戏取「每天最后一笔」（`daily: true`），行数会小一个量级
+ *
+ * `daily: true` 是这里最实用的开关：3965 行里绝大多数是同一天同一游戏的重复采样，
+ * 收敛成「每天一笔」后生涯页只需要几百行，却完全够画曲线。
+ */
+export interface PriceHistoryQuery {
+  appIds?: number[]
+  /** 只看最近多少天（不传 = 全部） */
+  sinceDays?: number
+  /** 每天只留最后一笔 */
+  daily?: boolean
+  limit?: number
+}
+
+export function queryPriceHistory(q: PriceHistoryQuery): PricePoint[] {
+  const where: string[] = []
+  const params: Record<string, unknown> = {}
+  // 语义要分清：**不传 appIds = 全部**；**传了（哪怕是空数组）= 只要这些**。
+  // 早前写成 `if (q.appIds && q.appIds.length > 0)`，于是空数组会退化成「全部」——
+  // 页面在「一个游戏都没有」时（比如刚退出登录）会因此拉回整张价格表。
+  if (q.appIds !== undefined) {
+    const list = q.appIds.filter((n) => Number.isFinite(n) && n > 0)
+    if (list.length === 0) return []
+    where.push(`app_id IN (${list.map((_, i) => `$a${i}`).join(',')})`)
+    list.forEach((id, i) => { params[`a${i}`] = id })
+  }
+  if (Number.isFinite(q.sinceDays) && (q.sinceDays ?? 0) > 0) {
+    where.push('captured_at >= $since')
+    params.since = Math.floor(Date.now() / 1000) - Math.floor(q.sinceDays as number) * 86400
+  }
+  const clause = where.length ? ` WHERE ${where.join(' AND ')}` : ''
+  const limit = Math.max(0, Math.min(20000, Math.floor(q.limit ?? 0)))
+  const tail = limit > 0 ? ` LIMIT ${limit}` : ''
+  if (q.daily) {
+    // 每款每天取最大 rowid（即当天最后一笔），再按时间正序输出
+    return all(
+      `SELECT * FROM price_history WHERE rowid IN (
+         SELECT MAX(rowid) FROM price_history${clause} GROUP BY app_id, date(captured_at, 'unixepoch')
+       ) ORDER BY captured_at${tail}`,
+      params
+    ).map(rowToPricePoint)
+  }
+  return all(`SELECT * FROM price_history${clause} ORDER BY app_id, captured_at${tail}`, params).map(rowToPricePoint)
+}
+
 // ---------- 命名查询（11 个）----------
 function mapRows(name: DbQueryName, rows: Row[]): unknown[] {
   switch (name) {
@@ -225,10 +327,17 @@ export function loadSnapshot(currentSteamId = ''): {
     ).map(rowToSession),
     // 成就：走更紧凑的传输形态（图标只带文件名），4536 条约省 0.8 MB IPC 负载。
     // 渲染层用 expandAchievement() 拼回完整 URL，界面代码不用改。
-    achievements: all('SELECT * FROM achievements').map(rowToAchievement).map(toSnapshotAchievement),
+    // 成就**明细不再进快照**：实测 4536 行 ≈ 975 KB，每次启动都要 structured-clone 一遍，
+    // 而大多数用户根本不会打开成就页。统计数字（总数/已解锁/稀有数）已经在 games 表的
+    // achievements_total / _unlocked / rare_achievements 上，仪表盘与分析页照常可用；
+    // 明细改由成就页按需通过 `listAchievements()` 拉（见 queryAchievements）。
+    achievements: [],
     wishlist: all('SELECT * FROM wishlist').map(rowToWishlist),
     discounts: all('SELECT * FROM discounts').map(rowToDiscount),
-    priceHistory: all('SELECT * FROM price_history ORDER BY captured_at').map(rowToPricePoint),
+    // 价格历史同样不进快照（实测 3965 行 ≈ 400 KB，走 IPC 纯属浪费）：
+    // 只有「详情页看走势」「愿望单看到手价曲线」「生涯页看库价值」这三处需要，
+    // 改由 `queryPriceHistory()` 按需拉。
+    priceHistory: [],
     notes: listNotes(),
     picks: listPicks(),
     accountSwitch: currentSteamId ? detectAccountSwitch(currentSteamId) : null,

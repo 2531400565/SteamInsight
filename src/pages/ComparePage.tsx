@@ -1,3 +1,4 @@
+import { usePriceHistory } from '@/hooks/useAchievements'
 import { useMemo, useState, type ReactNode } from 'react'
 import { ExternalLink, GitCompareArrows, Info, Search, Star, X } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, GameCover, ProgressBar, SectionHeader } from '@/components/ui'
@@ -43,10 +44,12 @@ export default function ComparePage() {
   const [query, setQuery] = useState('')
 
   const byId = useMemo(() => new Map(games.map((g) => [g.appId, g])), [games])
+  /** 史低达成率要算「本机采样里的最低价」——只需对比中的那几款，按需拉它们的采样。 */
+  const { all: priceHistory } = usePriceHistory(selected, { daily: true })
   /** V4/F8：本机价格采样里每个 appId 的最低价（与史低同一口径），用于「史低达成率」。 */
   const lowestByApp = useMemo(() => {
     const m = new Map<number, number>()
-    for (const p of snapshot?.priceHistory ?? []) {
+    for (const p of priceHistory) {
       if (p.priceCents < 0) continue
       const cur = m.get(p.appId)
       if (cur === undefined || p.priceCents < cur) m.set(p.appId, p.priceCents)

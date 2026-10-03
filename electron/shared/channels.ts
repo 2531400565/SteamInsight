@@ -50,8 +50,28 @@ export const CH = {
   exportWrapped: 'export:wrapped',
   exportTable: 'export:table',
 
+  // ---- 成就（按需取数 + 补全）----
+  achQuery: 'ach:query',
+  priceHistoryQuery: 'price:history',
+  apiHealth: 'net:api-health',
+  secretStatus: 'app:secret-status',
+  storeSearch: 'store:search',
+  achBackfill: 'ach:backfill',
+  achBackfillProgress: 'ach:backfill-progress',
+
   // ---- 诊断与数据包 ----
   netDiagnose: 'net:diagnose',
+  /** hosts 劫持状态（只读诊断） */
+  hostsStatus: 'net:hosts-status',
+  /** hosts 外科手术式还原的执行计划（只算不写，供界面预览） */
+  hostsPlan: 'net:hosts-plan',
+  /** 执行还原（内部先备份再提权写入） */
+  hostsApply: 'net:hosts-apply',
+  hostsBackups: 'net:hosts-backups',
+  hostsRestore: 'net:hosts-restore',
+  /** 应用级自定义代理（只影响本应用，不动系统） */
+  proxyApply: 'net:proxy-apply',
+  proxyTest: 'net:proxy-test',
   diagExport: 'diag:export',
   packExport: 'pack:export',
   packImport: 'pack:import',

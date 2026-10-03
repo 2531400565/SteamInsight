@@ -164,3 +164,69 @@ export async function syncAchievements(
 
   return { achievements, firstByGame }
 }
+
+/**
+ * 「全量补抓成就」任务。
+ *
+ * 背景：同步策略是**增量**的（只抓本次时长增长 + 失败重试的游戏），所以新买的、
+ * 长期没玩的游戏永远没有成就数据 —— 实测 69 款库里只有 56 款有成就记录，
+ * 成就中心/追猎榜因此天然偏全。用户想补齐时不必等「玩一次」触发。
+ *
+ * 三条约束：
+ *  1. 只处理「库里完全没有该游戏成就记录」的那些（`achievementCounts()` 里没有的），
+ *     绝不覆盖已有数据 —— 补全是填空白，不是重算；
+ *  2. 逐款串行（并发 2）并带进度广播，避免把 Steam API 打到限流；
+ *  3. 单款失败（含 400 无成就）只记账不中断，整轮跑完再汇总。
+ */
+export async function backfillAchievements(
+  steamId: string,
+  games: OwnedGame[],
+  onProgress: (p: { total: number; done: number; failed: number; added: number; currentAppId: number | null; currentName: string }) => void
+): Promise<{ attempted: number; added: number; failed: number }> {
+  const counts = repo.achievementCounts()
+  const targets = games.filter((g) => !counts.has(g.appId))
+  let done = 0
+  let failed = 0
+  let added = 0
+  for (const g of targets) {
+    onProgress({ total: targets.length, done, failed, added, currentAppId: g.appId, currentName: g.name })
+    try {
+      const pa = await getPlayerAchievements(steamId, g.appId)
+      if (pa.achievements.length) {
+        const [gp, schema] = await Promise.all([
+          getGlobalAchievementPercentagesForApp(g.appId).catch(() => ({}) as Record<string, number>),
+          getAchievementSchema(g.appId).catch(() => new Map())
+        ])
+        const rows: Achievement[] = []
+        let total = 0, unlocked = 0, rare = 0
+        for (const a of pa.achievements) {
+          const sc = schema.get(a.apiName)
+          const pct = gp[a.apiName] ?? 0
+          const isRare = pct > 0 && pct < 10
+          if (isRare && a.unlocked) rare++
+          if (a.unlocked) unlocked++
+          total++
+          rows.push({
+            appId: g.appId, apiName: a.apiName,
+            displayName: a.displayName || sc?.displayName || '',
+            description: a.description || sc?.description || '',
+            iconUrl: sc?.iconUrl ?? '', iconGrayUrl: sc?.iconGrayUrl ?? '',
+            unlocked: a.unlocked, unlockedAt: a.unlockTime, globalPercent: pct, isRare, hidden: sc?.hidden ?? false
+          })
+        }
+        repo.saveAchievements(rows)
+        // 计数回写 games 表：仪表盘/分析页读的是这里，不回写它们会一直显示 0
+        repo.setAchievementCounts(g.appId, total, unlocked, rare)
+        added += rows.length
+      }
+    } catch (err) {
+      // 含「无成就」的 400：不重试（api-base 已归为 permanent），只记账
+      failed += 1
+      logInfo('ach', '补抓该游戏失败', { appId: g.appId, error: err instanceof Error ? err.message : String(err) })
+    }
+    done += 1
+  }
+  onProgress({ total: targets.length, done, failed, added, currentAppId: null, currentName: '' })
+  logInfo('ach', '成就补全结束', { targets: targets.length, done, failed, added })
+  return { attempted: targets.length, added, failed }
+}

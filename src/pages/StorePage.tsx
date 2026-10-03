@@ -1,12 +1,13 @@
-import { useMemo, type ReactNode } from 'react'
-import { BadgePercent, ExternalLink, Gift, Info, Library, Star, Store, Tag, Timer } from 'lucide-react'
-import { Badge, Card, EmptyState, SectionHeader, Select } from '@/components/ui'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { BadgePercent, ExternalLink, Gift, Info, Library, LoaderCircle, Search, Star, Store, Tag, Timer } from 'lucide-react'
+import { Badge, Card, EmptyState, GameCover, SectionHeader, Select } from '@/components/ui'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { DiscountCard } from '@/components/shared/DiscountCard'
 import { useAppStore } from '@/store/useAppStore'
 import { useDataStore } from '@/store/useDataStore'
 import { bridge } from '@/services/bridge'
 import type { DiscountCategory, DiscountItem, OwnedGame } from '@/types/steam'
+import type { StoreSearchHit } from '@/types/ipc'
 import { DISCOUNT_TABS } from '@/utils/constants'
 import { formatMoney } from '@/utils/format'
 import { usePersistedState } from '@/hooks/usePersistedState'
@@ -151,6 +152,8 @@ export default function StorePage() {
         })}
       </div>
 
+      <StoreSearch />
+
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatBox icon={<BadgePercent size={16} />} label="在售折扣" value={`${discounts.length} 款`} hint="本次同步抓取到的全部折扣条目" />
         <StatBox icon={<Library size={16} />} label="我库内打折" value={`${owned.length} 款`} hint="你已拥有且正在打折的游戏" />
@@ -269,6 +272,114 @@ function StatBox({ icon, label, value, hint }: { icon: ReactNode; label: string;
       </div>
       <p className="mt-1.5 text-[19px] font-semibold text-t1">{value}</p>
       <p className="mt-0.5 text-[11px] leading-relaxed text-t3">{hint}</p>
+    </Card>
+  )
+}
+
+
+/**
+ * 折扣页的商店搜索框。
+ *
+ * 折扣池只有 40 条且按折扣力度排序，用户真正想问的往往是「我那款在不在打折」——
+ * 翻列表很慢，搜索才是对的姿势。命中项直接标出「已拥有 / 已在愿望单 / 正在打折」，
+ * 点卡片跳商店、点已拥有的进详情页。
+ */
+function StoreSearch(): React.JSX.Element {
+  const [keyword, setKeyword] = useState('')
+  const [hits, setHits] = useState<StoreSearchHit[]>([])
+  const [loading, setLoading] = useState(false)
+  const [searched, setSearched] = useState(false)
+  const navigate = useAppStore((s) => s.navigate)
+  const games = useDataStore((s) => s.snapshot?.games)
+  const wishlist = useDataStore((s) => s.snapshot?.wishlist)
+  const ownedIds = useMemo(() => new Set((games ?? []).map((g) => g.appId)), [games])
+  const wishIds = useMemo(() => new Set((wishlist ?? []).map((w) => w.appId)), [wishlist])
+
+  // 输入停 400ms 才发请求：商店接口不快，边打字边请求既慢又容易被限流
+  useEffect(() => {
+    const kw = keyword.trim()
+    if (!kw) { setHits([]); setSearched(false); return }
+    let cancelled = false
+    setLoading(true)
+    const timer = setTimeout(() => {
+      void bridge.store.search(kw)
+        .then((r) => { if (!cancelled) { setHits(r); setSearched(true) } })
+        .catch(() => { if (!cancelled) { setHits([]); setSearched(true) } })
+        .finally(() => { if (!cancelled) setLoading(false) })
+    }, 400)
+    return () => { cancelled = true; clearTimeout(timer); setLoading(false) }
+  }, [keyword])
+
+  // 注意：**输入框任何时候都要渲染**。曾经写成「空关键词就整个不渲染」，
+  // 结果搜索框自己消失了，用户连输入的地方都没有 —— 典型的「空状态把入口也吃掉」。
+  const hasQuery = keyword.trim().length > 0
+
+  return (
+    <Card padding="md">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[260px] flex-1">
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-t3" />
+          <input
+            autoFocus
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            placeholder="搜索任意游戏，查它现在打不打折…"
+            className="w-full rounded-pill border border-line bg-bg2/70 py-2 pl-9 pr-3 text-[13px] text-t1 outline-none transition-colors placeholder:text-t3 focus:border-line3"
+          />
+        </div>
+        {loading ? <LoaderCircle size={15} className="spin text-t3" /> : null}
+      </div>
+
+      {!hasQuery ? (
+        <p className="mt-2 text-[11.5px] text-t3">输入游戏名即可查它现在打不打折 —— 折扣池只有 40 条，按名字搜比翻列表快。</p>
+      ) : null}
+
+      {!loading && searched && hits.length === 0 ? (
+        <p className="mt-3 text-[12px] text-t3">没有搜到「{keyword.trim()}」相关的游戏，试试换个译名或英文名。</p>
+      ) : null}
+
+      {hits.length > 0 ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {hits.map((h) => (
+            <div key={h.appId} className="flex items-center gap-2.5 rounded-xl border border-line bg-bg1/45 px-2.5 py-2">
+              <GameCover
+                src={`https://cdn.cloudflare.steamstatic.com/steam/apps/${h.appId}/header.jpg`}
+                name={h.name}
+                className="h-9 w-16 shrink-0"
+                rounded="rounded-md"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[12.5px] text-t1">{h.name}</p>
+                <p className="mt-0.5 flex items-center gap-1.5 text-[11px]">
+                  {h.discountPercent > 0 ? (
+                    <>
+                      <span className="text-accent">-{h.discountPercent}%</span>
+                      <span className="text-t3 line-through">{formatMoney(h.originalPriceCents)}</span>
+                      <span className="text-t1">{formatMoney(h.finalPriceCents)}</span>
+                    </>
+                  ) : (
+                    <span className="text-t3">{h.finalPriceCents === 0 ? '免费' : `${formatMoney(h.finalPriceCents)} · 暂无折扣`}</span>
+                  )}
+                </p>
+              </div>
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                {ownedIds.has(h.appId) ? (
+                  <button type="button" onClick={() => navigate('game', { appId: h.appId, from: 'store' })}
+                    className="rounded-pill border border-line2 px-2 py-0.5 text-[10.5px] text-t2 transition-colors hover:border-line3 hover:text-t1">
+                    已拥有 · 查看
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => void bridge.app.openExternal(`https://store.steampowered.com/app/${h.appId}/`)}
+                    className="rounded-pill border border-line2 px-2 py-0.5 text-[10.5px] text-t2 transition-colors hover:border-line3 hover:text-t1">
+                    商店页
+                  </button>
+                )}
+                {wishIds.has(h.appId) ? <span className="text-[10px] text-ok">已在愿望单</span> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </Card>
   )
 }

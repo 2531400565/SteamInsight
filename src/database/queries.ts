@@ -83,17 +83,17 @@ export const PRUNE_SQL = {
                      SELECT MIN(p2.price_cents) FROM price_history p2 WHERE p2.app_id = price_history.app_id
                    ))`,
   /**
-   * snapshots：每款游戏只留最近 2 条。
+   * snapshots：每款游戏只留最近 N 条（N = SNAPSHOT_KEEP_ROWS，现为 30）。
    *
-   * 它的唯一用途是「与上一次快照做差分」（sync.ts 的 lastSnapshot()），
-   * 更早的快照从来没有被任何代码读过 —— 纯占体积。
-   * 留 2 条而不是 1 条，是为了让 lastSnapshot() 在这次采样写入后依然能读到基准值。
+   * 差分只需要最近一条，但**历史快照本身就是数据资产**：它让「这个游戏我玩了多久、
+   * 什么时候开始玩、这一年玩了哪些」这类问题有答案，而这些问题 Steam 官方不提供历史接口 ——
+   * 也就没法靠任何现查型工具（含手机端）回答。代价是每款 30 行 × 游戏数，很小。
    */
   snapshots: `DELETE FROM snapshots
               WHERE rowid IN (
                 SELECT rowid FROM snapshots s
                 WHERE (SELECT COUNT(*) FROM snapshots s2
-                       WHERE s2.app_id = s.app_id AND s2.captured_at > s.captured_at) >= 2
+                       WHERE s2.app_id = s.app_id AND s2.captured_at > s.captured_at) >= 30
               )`
 } as const
 

@@ -323,3 +323,108 @@ export function pricePercentileRank(points: PricePoint[], priceCents: number): n
   for (const v of vals) if (v <= priceCents) below += 1
   return Math.round((below / (vals.length + 1)) * 100)
 }
+
+/**
+ * 「Steam 生涯」聚合（V5 差异化功能的核心）。
+ *
+ * 这一页回答的是**「你的库在过去几年里发生了什么」** —— 而不是「这个游戏现在多少钱」。
+ * 差别在于数据来源：Steam 官方没有历史接口，任何现查型工具（含手机端 App）都拿不到这些；
+ * 只有本机长期跑、不断累积采样，才能拼出下面这几条曲线。
+ *
+ * 所有输入都来自本地库，**不额外请求任何接口**，所以它既离线可用也不会消耗 API 配额。
+ */
+export interface CareerPoint {
+  /** YYYY-MM */
+  month: string
+  /** 当月游玩分钟数（由会话/快照差分汇总） */
+  minutes: number
+  /** 当月解锁的成就数 */
+  achievements: number
+  /** 当月新增游戏数（按首玩时间归月） */
+  newGames: number
+  /** 当月为这些新游戏付出的原价总额（分） */
+  spentCents: number
+}
+
+export interface CareerSummary {
+  months: CareerPoint[]
+  totalMinutes: number
+  totalAchievements: number
+  totalSpentCents: number
+  /** 库中原价总额（分）——「你为这个库花了多少钱」的答案 */
+  libraryValueCents: number
+  /** 有数据的月份数（不足 2 个月时趋势类结论要慎用） */
+  monthsCovered: number
+  firstMonth: string | null
+  lastMonth: string | null
+}
+
+function ym(sec: number): string {
+  const d = new Date(sec * 1000)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+/**
+ * 汇总生涯曲线。
+ *
+ * @param sessions  会话（由快照差分生成）→ 时长
+ * @param achievements 成就明细 → 解锁时间
+ * @param games 游戏库 → 首玩时间与原价
+ * @param months 输出近多少个月（默认 24）
+ */
+export function buildCareer(
+  sessions: PlaySession[],
+  achievements: Achievement[],
+  games: OwnedGame[],
+  months = 24,
+  nowSec = Math.floor(Date.now() / 1000)
+): CareerSummary {
+  const buckets = new Map<string, CareerPoint>()
+  const key = (offset: number): string => {
+    const d = new Date((nowSec - offset * 30 * 86400) * 1000)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  }
+  // 预生成最近 N 个月的桶，保证没有数据的月份也占位（曲线才不会「跳过」空月）
+  for (let i = months - 1; i >= 0; i--) {
+    buckets.set(key(i), { month: key(i), minutes: 0, achievements: 0, newGames: 0, spentCents: 0 })
+  }
+  const ensure = (m: string): CareerPoint => {
+    let b = buckets.get(m)
+    if (!b) { b = { month: m, minutes: 0, achievements: 0, newGames: 0, spentCents: 0 }; buckets.set(m, b) }
+    return b
+  }
+
+  for (const s of sessions) {
+    if (!s.playDate) continue
+    ensure(s.playDate.slice(0, 7)).minutes += s.minutes
+  }
+  for (const a of achievements) {
+    if (!a.unlocked || !a.unlockedAt) continue
+    ensure(ym(a.unlockedAt)).achievements += 1
+  }
+  for (const g of games) {
+    if (!g.firstPlayedAt) continue
+    const b = ensure(ym(g.firstPlayedAt))
+    b.newGames += 1
+    // 原价才是「花出去的钱」：现价只是今天的标价，用它会低估历史投入
+    b.spentCents += g.originalPriceCents > 0 ? g.originalPriceCents : 0
+  }
+
+  const list = [...buckets.values()].sort((a, b) => a.month.localeCompare(b.month))
+  const totalMinutes = list.reduce((s, p) => s + p.minutes, 0)
+  const totalAchievements = achievements.filter((a) => a.unlocked).length
+  const totalSpentCents = list.reduce((s, p) => s + p.spentCents, 0)
+  const libraryValueCents = games.reduce((s, g) => s + (g.originalPriceCents > 0 ? g.originalPriceCents : 0), 0)
+  const covered = list.filter((p) => p.minutes > 0 || p.achievements > 0 || p.newGames > 0).length
+
+  return {
+    months: list,
+    totalMinutes,
+    totalAchievements,
+    totalSpentCents,
+    libraryValueCents,
+    monthsCovered: covered,
+    firstMonth: list[0]?.month ?? null,
+    lastMonth: list[list.length - 1]?.month ?? null
+  }
+}

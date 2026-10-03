@@ -1,3 +1,4 @@
+import { useGameAchievements, usePriceHistory } from '@/hooks/useAchievements'
 import { useMemo } from 'react'
 import { ArrowLeft, Award, Calendar, ChartLine, Clock, ExternalLink, Hourglass, Info, ShoppingCart, Star, Tag, Trophy } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, GameCover, ProgressBar, RatingBar, SectionHeader, Tooltip } from '@/components/ui'
@@ -20,14 +21,16 @@ export default function GameDetailPage({ game }: { game: OwnedGame }) {
   const backTo = from && from !== 'game' ? from : 'analysis'
   const snapshot = useDataStore((s) => s.snapshot)
   // 成就读 derived 展开后的那一份（快照里是紧凑形态：图标只带文件名）
-  const achievements = useDataStore((s) => s.derived?.achievements) ?? []
+  // 详情页只要这一款游戏的成就，用带 appId 的按需查询，不拉全量
+  const { achievements } = useGameAchievements(game.appId)
 
   const sessions = snapshot?.sessions ?? []
 
-  /** 这款游戏的价格采样（库里存的，已按 captured_at 升序）。 */
+  /** 这款游戏的价格采样：按需拉（快照不再带整表 price_history），已按 captured_at 升序。 */
+  const { byApp: priceByApp } = usePriceHistory([game.appId], { sinceDays: 90 })
   const pricePoints = useMemo(
-    () => (snapshot?.priceHistory ?? []).filter((p) => p.appId === game.appId && p.priceCents >= 0),
-    [snapshot, game.appId]
+    () => (priceByApp.get(game.appId) ?? []).filter((p) => p.priceCents >= 0),
+    [priceByApp, game.appId]
   )
   /** 采样里的历史最低价（与 StorePage 的史低判定同一口径：本机采样，不是第三方数据）。 */
   const priceLow = useMemo(

@@ -3,12 +3,13 @@
  * 所有 IPC 通道都来自 electron/shared/channels.ts，不写裸字符串。
  */
 import { app, ipcMain, shell, BrowserWindow } from 'electron'
+import fs from 'node:fs'
 import { CH } from '@shared/channels'
 import type { AppSettings, SteamUser } from '@/types/steam'
-import type { AuthStartResult, DataPackResult, DbQueryRequest, GameNotePatch, HuntPickPatch, ManualSessionPatch, NotifyPayload, TableExportRequest, WrappedExportRequest } from '@shared/contract'
+import type { AchievementBackfillProgress, AchievementBackfillResult, AchievementQueryRequest, AuthStartResult, DataPackResult, DbQueryRequest, GameNotePatch, HuntPickPatch, ManualSessionPatch, NotifyPayload, PriceHistoryRequest, TableExportRequest, WrappedExportRequest } from '@shared/contract'
 import type { SyncRunOptions } from '@/types/ipc'
 import { appVersion, userDataDir } from './paths'
-import { getSettings, setSettings, applySettingsOnReady } from './settings'
+import { getSettings, setSettings, applySettingsOnReady, isApiKeyEncrypted, migratePlainSecret } from './settings'
 import { initDatabase, flushNow, clearCache, databaseFilePath, vacuum } from './database'
 import { getDatabaseHealth } from './db-health'
 import * as repo from './repository'
@@ -21,7 +22,14 @@ import { markWishlistNotified } from './notify-plan'
 import { notify, initNotifications, createTray, refreshTray } from './notifications'
 import { exportTable, exportWrapped, setExporterWindow } from './exporter'
 import { appInfo, exportDiagnostics } from './diagnostics'
+import { backfillAchievements } from './achievement-sync'
+import { loadApiHealth, storeSearchByKeyword } from './steam-store'
 import { diagnoseNetwork } from './net-diagnose'
+import { isSafeExternalUrl } from './safe-url'
+import { applyCustomProxy, testProxy } from './http'
+import {
+  HOSTS_PATH, applyHostsPlan, listHostsBackups, planHostsRewrite, readHostsStatus, restoreHostsFromBackup
+} from './hosts-guard'
 import { exportDataPack, importDataPack } from './datapack'
 import { backupStatus, maybeBackup, runBackup, backupsDir } from './auto-backup'
 import { flushLogs, initLogger, logError, logInfo } from './logger'
@@ -67,6 +75,8 @@ function setupAutoSync(): void {
  * 一次性定时器在休眠/休眠唤醒后会漂移，而轮询天然自愈 —— 醒来后下一个 tick 就会补上。
  */
 let backupTimer: NodeJS.Timeout | null = null
+/** 成就补全任务的互斥标志：它是「逐款打 API」的长任务，重复触发只会白烧配额。 */
+let backfillRunning = false
 function setupAutoBackup(): void {
   if (backupTimer) { clearInterval(backupTimer); backupTimer = null }
   backupTimer = setInterval(() => { void maybeBackup('auto') }, 30 * 60 * 1000)
@@ -74,10 +84,11 @@ function setupAutoBackup(): void {
 
 function registerIpc(): void {
   ipcMain.handle(CH.appInfo, () => appInfo())
+  // Key 的落盘安全状态：设置页要如实告诉用户「已加密」还是「本机不支持加密、明文保存」
+  ipcMain.handle(CH.secretStatus, () => ({ encrypted: isApiKeyEncrypted() }))
   ipcMain.handle(CH.openExternal, (_e, url: string) => {
-    // 只放行 http / https：shell.openExternal 会把地址交给系统 shell 处理，
-    // 若放任 file:// 或自定义协议（如 ms-msdt:），渲染层等于拿到了任意命令入口。
-    if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return false
+    // 白名单规则集中在 safe-url.ts，IPC 与 window.open 两条路径共用同一把尺子
+    if (!isSafeExternalUrl(url)) return false
     void shell.openExternal(url)
     return true
   })
@@ -157,6 +168,59 @@ function registerIpc(): void {
 
   // 诊断与数据包
   ipcMain.handle(CH.netDiagnose, () => diagnoseNetwork())
+  ipcMain.handle(CH.apiHealth, () => loadApiHealth())
+  // 成就：明细按需查询（全量明细不再随快照下发）
+  ipcMain.handle(CH.storeSearch, (_e, kw: string) => storeSearchByKeyword(kw))
+  ipcMain.handle(CH.priceHistoryQuery, (_e, req: PriceHistoryRequest) => repo.queryPriceHistory(req ?? {}))
+  ipcMain.handle(CH.achQuery, (_e, req: AchievementQueryRequest) => repo.queryAchievements(req ?? {}))
+  // 成就补全：逐款抓取并广播进度
+  ipcMain.handle(CH.achBackfill, async () => {
+    const settings = getSettings()
+    if (backfillRunning) {
+      return { ok: false, attempted: 0, added: 0, failed: 0, error: '补全任务已在运行中' } satisfies AchievementBackfillResult
+    }
+    if (!settings.steamId || !settings.steamApiKey) {
+      return { ok: false, attempted: 0, added: 0, failed: 0, error: '尚未配置 Steam 账号与 API Key' } satisfies AchievementBackfillResult
+    }
+    const games = [...repo.existingGames().values()]
+    backfillRunning = true
+    const push = (p: { total: number; done: number; failed: number; added: number; currentAppId: number | null; currentName: string }): void => {
+      getMainWindow()?.webContents.send(CH.achBackfillProgress, { running: true, finishedAt: null, ...p } satisfies AchievementBackfillProgress)
+    }
+    try {
+      const r = await backfillAchievements(settings.steamId, games, push)
+      getMainWindow()?.webContents.send(CH.achBackfillProgress, { running: false, finishedAt: Date.now(), total: r.attempted, done: r.attempted, failed: r.failed, added: r.added, currentAppId: null, currentName: '' } satisfies AchievementBackfillProgress)
+      return { ok: true, ...r, error: null } satisfies AchievementBackfillResult
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      getMainWindow()?.webContents.send(CH.achBackfillProgress, { running: false, finishedAt: Date.now(), total: 0, done: 0, failed: 0, added: 0, currentAppId: null, currentName: '' } satisfies AchievementBackfillProgress)
+      return { ok: false, attempted: 0, added: 0, failed: 0, error: msg } satisfies AchievementBackfillResult
+    } finally {
+      backfillRunning = false
+    }
+  })
+
+  // hosts 劫持守卫：诊断与计划都是只读，只有 apply / restore 会写系统文件（内部先备份 + 提权）
+  ipcMain.handle(CH.hostsStatus, () => readHostsStatus())
+  ipcMain.handle(CH.hostsPlan, async () => {
+    const plan = planHostsRewrite(fs.readFileSync(HOSTS_PATH, 'utf8'))
+    return { disable: plan.disable, kept: plan.kept, changed: plan.changed }
+  })
+  ipcMain.handle(CH.hostsApply, async () => {
+    const plan = planHostsRewrite(fs.readFileSync(HOSTS_PATH, 'utf8'))
+    if (!plan.changed) {
+      return { ok: true, disabledCount: 0, backupFile: null, error: null, verified: true }
+    }
+    return applyHostsPlan(plan)
+  })
+  ipcMain.handle(CH.hostsBackups, () => listHostsBackups())
+  ipcMain.handle(CH.hostsRestore, (_e, file: string) => restoreHostsFromBackup(file))
+  ipcMain.handle(CH.proxyApply, (_e, proxyText: string) => {
+    // 存设置 + 立即生效（只作用于本应用的 Chromium 会话）
+    setSettings({ ...getSettings(), customProxy: proxyText })
+    return applyCustomProxy(proxyText)
+  })
+  ipcMain.handle(CH.proxyTest, () => testProxy())
   ipcMain.handle(CH.diagExport, () => exportDiagnostics())
   ipcMain.handle(CH.packExport, (): Promise<DataPackResult> => exportDataPack())
   ipcMain.handle(CH.packImport, (_e, mode: 'replace' | 'merge') => importDataPack(mode === 'merge' ? 'merge' : 'replace'))
@@ -193,6 +257,11 @@ async function main(): Promise<void> {
     logInfo('app', '启动时完成采样表降采样', { prunedPriceHistory: pruned.priceHistory, prunedSnapshots: pruned.snapshots })
   }
   applySettingsOnReady()
+  // 升级即加密：不等用户去设置页操作，启动时就把旧文件里的明文 Key 升级成密文
+  migratePlainSecret()
+  // 自定义代理必须在启动时重新应用一次：setProxy 只对当前会话有效，
+  // 不重放的话「上次填的代理」重启后就悄悄失效了（设置里还显示着，行为却不符）。
+  void applyCustomProxy()
   setAuthStatus(getSettings().steamId || null)
 
   // 冷启动回填「上次同步时间」：数据库里已有历史同步结果时，若状态仍是初始值，
